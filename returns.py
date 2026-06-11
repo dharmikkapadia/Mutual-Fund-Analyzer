@@ -217,6 +217,64 @@ def annualised_vol(series: pd.Series) -> float:
     return float(rets.std() * np.sqrt(TRADING_DAYS)) if not rets.empty else np.nan
 
 
+def risk_ratios(series: pd.Series, rf: float = 0.065,
+                years: float | None = None) -> dict:
+    """Sharpe & Sortino over the trailing `years` window (None = full history).
+
+    `rf` is the annual risk-free rate (decimal). Sharpe = (CAGR - rf) / ann.
+    vol of daily returns; Sortino uses downside deviation below the daily
+    risk-free rate. Returns {} when there isn't enough history.
+    """
+    s = _clean(series)
+    if years:
+        s = s[s.index >= s.index.max() - pd.DateOffset(years=int(years))]
+    rets = s.pct_change().dropna()
+    if len(s) < 2 or rets.empty:
+        return {}
+    span = (s.index.max() - s.index.min()).days / DAYS_PER_YEAR
+    if span <= 0:
+        return {}
+    cagr = (s.iloc[-1] / s.iloc[0]) ** (1.0 / span) - 1.0
+    vol = float(rets.std() * np.sqrt(TRADING_DAYS))
+    rf_daily = (1.0 + rf) ** (1.0 / TRADING_DAYS) - 1.0
+    downside = (rets[rets < rf_daily] - rf_daily)
+    down_dev = float(np.sqrt((downside ** 2).sum() / len(rets))
+                     * np.sqrt(TRADING_DAYS))
+    return {
+        "years": float(span), "cagr": float(cagr), "vol": vol,
+        "sharpe": float((cagr - rf) / vol) if vol > 0 else np.nan,
+        "sortino": float((cagr - rf) / down_dev) if down_dev > 0 else np.nan,
+    }
+
+
+def snapshot(series: pd.Series, spark_points: int = 60) -> dict:
+    """One-row summary for dashboards / peer tables: latest NAV, 1D change,
+    1Y absolute, 3Y/5Y CAGR (% values), max drawdown %, and a downsampled
+    1Y NAV sparkline."""
+    s = _clean(series)
+    if s.empty:
+        return {}
+    end = s.index.max()
+    out = {"nav": float(s.iloc[-1]), "date": end,
+           "chg_1d": float((s.iloc[-1] / s.iloc[-2] - 1.0) * 100)
+           if len(s) > 1 else np.nan}
+    for label, yrs in (("1Y", 1), ("3Y", 3), ("5Y", 5)):
+        start = end - pd.DateOffset(years=yrs)
+        if start >= s.index.min():
+            p = point_to_point(s, start, end)
+            out[label] = (p["cagr"] * 100 if p["cagr"] is not None
+                          else p["abs"] * 100)
+        else:
+            out[label] = np.nan
+    out["mdd"] = max_drawdown(s) * 100
+    spark = s[s.index >= end - pd.DateOffset(years=1)]
+    if len(spark) > spark_points:
+        spark = spark.iloc[np.linspace(0, len(spark) - 1,
+                                       spark_points).astype(int)]
+    out["spark"] = [float(v) for v in spark.values]
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # SIP / XIRR
 # --------------------------------------------------------------------------- #

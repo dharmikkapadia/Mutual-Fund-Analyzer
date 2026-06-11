@@ -37,6 +37,9 @@ The launcher starts Streamlit headless via `python -m streamlit` (the reliable
 invocation when the Scripts dir isn't on PATH) and opens the browser.
 
 ## Features (v1)
+- **Watchlist dashboard** — sortable grid of every scheme in the active list: 1Y NAV sparkline, latest NAV, 1D/1Y/3Y/5Y returns and max drawdown, red/green coded.
+- **Risk ratios** — Sharpe and Sortino over a selectable 1Y/3Y/5Y/All window with a configurable risk-free rate, beside volatility and CAGR on the Overview.
+- **Category peers** — benchmark a scheme against its full AMFI category universe (e.g. a small-cap fund vs every other small-cap fund): rank and percentile per horizon, box-plot distribution with the scheme marked, and a sortable peer table. Growth-only and Direct/Regular plan filters keep the peer set honest; histories are fetched once on demand and cached.
 - **Watchlists** — multiple named lists, persisted at `~/.afp_nav_explorer/watchlists.json`.
 - **Point-to-point returns** — custom dates, financial-year (Apr–Mar) table, month-on-month table. Absolute always; CAGR shown when the span exceeds 1Y.
 - **Rolling returns** — 1/3/5Y daily-rolling, annualised, with distribution stats (min/max/median/avg, % negative, % above a hurdle, IQR) plus a histogram.
@@ -53,8 +56,7 @@ invocation when the Scripts dir isn't on PATH) and opens the browser.
 - `.streamlit/config.toml` — dark theme tokens for native Streamlit widgets.
 
 ## Roadmap (phase 2, scoped but not built)
-- Sharpe / Sortino (needs a configurable risk-free rate — wire from your CCIL/T-bill work).
-- Benchmark-relative metrics: alpha/beta, up/down capture (needs an index TRI series).
+- Benchmark-relative metrics vs an index: alpha/beta, up/down capture (needs an index TRI series).
 - AUM and expense ratio (AMFI monthly disclosure / other source).
 - Correlation matrix and a weighted blended-portfolio simulator.
 - Alerts (NAV move %, 52-wk high/low, drawdown breach) and AFP-branded Excel/PDF export.

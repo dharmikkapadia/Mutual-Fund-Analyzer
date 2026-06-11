@@ -131,9 +131,11 @@ def section(label: str) -> None:
 
 
 def table(df: pd.DataFrame, **kwargs) -> None:
-    """st.dataframe with NaN shown as an em-dash instead of 'None'."""
-    disp = df.round(2)
-    disp = disp.astype(object).where(disp.notna(), "—")
+    """st.dataframe with numbers pre-formatted and NaN as an em-dash
+    (the data grid renders nulls as 'None' even with a Styler na_rep)."""
+    disp = df.copy()
+    for c in disp.select_dtypes("number").columns:
+        disp[c] = disp[c].map(lambda v: "—" if pd.isna(v) else f"{v:,.2f}")
     st.dataframe(disp, width="stretch", **kwargs)
 
 
@@ -279,11 +281,81 @@ m3.metric("3Y CAGR", pct(tr.loc["3Y", "Annualised %"]) if "3Y" in tr.index else 
 m4.metric("5Y CAGR", pct(tr.loc["5Y", "Annualised %"]) if "5Y" in tr.index else "—")
 m5.metric("Max drawdown", pct(R.max_drawdown(series) * 100))
 
-tabs = st.tabs(["Overview", "Returns", "Rolling", "SIP / XIRR",
-                "Compare", "Watchlist"])
+tabs = st.tabs(["Dashboard", "Overview", "Returns", "Rolling", "SIP / XIRR",
+                "Compare", "Peers"])
+
+RET_COLS = ["1D %", "1Y %", "3Y % pa", "5Y % pa"]
+
+
+def _ret_color(v):
+    if pd.isna(v):
+        return f"color: {MUTED}"
+    return f"color: {UP}" if v >= 0 else f"color: {DOWN}"
+
+
+def snapshot_table(rows: list[dict], highlight_code: int | None = None) -> None:
+    """Render a snapshot grid: sparkline + red/green returns, sortable."""
+    num_df = pd.DataFrame(rows)
+    disp = num_df.copy()
+    ret_cols = [c for c in RET_COLS if c in disp.columns]
+    for c in ret_cols + (["Max DD %"] if "Max DD %" in disp.columns else []):
+        disp[c] = num_df[c].map(lambda v: "—" if pd.isna(v) else f"{v:.2f}")
+    if "NAV" in disp.columns:
+        disp["NAV"] = num_df["NAV"].map(
+            lambda v: "—" if pd.isna(v) else f"₹{v:,.2f}")
+    styler = disp.style.apply(
+        lambda col: num_df[col.name].map(_ret_color), subset=ret_cols)
+    if highlight_code is not None and "Code" in disp.columns:
+        styler = styler.apply(
+            lambda r: [f"background-color: {GRID}"] * len(r)
+            if r["Code"] == highlight_code else [""] * len(r), axis=1)
+    st.dataframe(
+        styler, hide_index=True, width="stretch",
+        height=min(40 + 35 * len(disp), 600),
+        column_config={
+            "1Y trend": st.column_config.LineChartColumn("1Y trend"),
+            "Code": st.column_config.NumberColumn("Code", format="%d"),
+        })
+
+
+# ---- Dashboard ---- #
+with tabs[0]:
+    section(f"Watchlist “{active}” — {len(codes)} scheme(s)")
+    snap_rows, failed = [], []
+    with st.spinner("Loading watchlist…"):
+        for c in codes:
+            try:
+                s_i, _ = get_history(c)
+                snap = R.snapshot(s_i)
+                if not snap:
+                    raise ValueError("empty history")
+            except Exception:  # noqa: BLE001
+                failed.append(c)
+                continue
+            snap_rows.append({
+                "Scheme": name_of(universe, c), "Code": c,
+                "NAV": snap["nav"], "1Y trend": snap["spark"],
+                "1D %": snap["chg_1d"], "1Y %": snap["1Y"],
+                "3Y % pa": snap["3Y"], "5Y % pa": snap["5Y"],
+                "Max DD %": snap["mdd"]})
+    if snap_rows:
+        snapshot_table(snap_rows, highlight_code=code)
+        st.caption("1Y is absolute; 3Y/5Y are CAGR. Click a column header "
+                   "to sort. The selected scheme is highlighted.")
+    if failed:
+        st.warning(f"Could not load: {', '.join(str(c) for c in failed)}")
+
+    section("Manage list")
+    for c in codes:
+        cc1, cc2 = st.columns([6, 1])
+        cc1.write(f"{name_of(universe, c)}  ·  `{c}`")
+        if cc2.button("Remove", key=f"rm_{c}"):
+            store.remove(st.session_state.watchlists, active, c)
+            st.rerun()
+    st.caption(f"Watchlists are saved at: {store.WATCHLIST_FILE}")
 
 # ---- Overview ---- #
-with tabs[0]:
+with tabs[1]:
     left, right = st.columns([2, 1], gap="large")
     with left:
         section("NAV history")
@@ -311,8 +383,31 @@ with tabs[0]:
     with right:
         section("Trailing returns")
         table(R.trailing_returns(series), hide_index=True)
-        st.metric("Annualised volatility", pct(R.annualised_vol(series) * 100),
-                  help="Stdev of daily returns, annualised over 252 trading days.")
+
+        section("Risk")
+        rc1, rc2 = st.columns(2)
+        rf = rc1.number_input("Risk-free %", value=6.5, step=0.25,
+                              help="Annual risk-free rate for Sharpe/Sortino "
+                                   "(e.g. 91-day T-bill yield).") / 100
+        win_lbl = rc2.selectbox("Window", ["3Y", "1Y", "5Y", "All"],
+                                help="Trailing window the ratios are "
+                                     "computed over.")
+        rr = R.risk_ratios(series, rf, {"1Y": 1, "3Y": 3, "5Y": 5,
+                                        "All": None}[win_lbl])
+        if rr:
+            k1, k2 = st.columns(2)
+            k1.metric("Sharpe", "—" if np.isnan(rr["sharpe"])
+                      else f"{rr['sharpe']:.2f}")
+            k2.metric("Sortino", "—" if np.isnan(rr["sortino"])
+                      else f"{rr['sortino']:.2f}")
+            k3, k4 = st.columns(2)
+            k3.metric("Volatility", pct(rr["vol"] * 100),
+                      help="Annualised stdev of daily returns over the window.")
+            k4.metric("CAGR", pct(rr["cagr"] * 100))
+            st.caption(f"Computed over {rr['years']:.1f}y of daily NAVs "
+                       f"vs a {rf*100:.2f}% risk-free rate.")
+        else:
+            st.caption("Not enough history for risk ratios.")
 
     section("Calendar-year returns")
     cal = R.calendar_year_returns(series)
@@ -343,7 +438,7 @@ with tabs[0]:
         chart(hm)
 
 # ---- Returns (point-to-point) ---- #
-with tabs[1]:
+with tabs[2]:
     section("Custom date range")
     lo, hi = series.index.min().date(), series.index.max().date()
     c1, c2 = st.columns(2)
@@ -372,7 +467,7 @@ with tabs[1]:
                      hide_index=True, width="stretch", height=380)
 
 # ---- Rolling ---- #
-with tabs[2]:
+with tabs[3]:
     c1, c2 = st.columns([1, 1])
     win = c1.radio("Rolling window", [1, 3, 5], horizontal=True,
                    format_func=lambda x: f"{x}Y")
@@ -414,7 +509,7 @@ with tabs[2]:
         chart(hist)
 
 # ---- SIP ---- #
-with tabs[3]:
+with tabs[4]:
     section("SIP return (XIRR)")
     c1, c2, c3, c4 = st.columns(4)
     amt = c1.number_input("Monthly amount (₹)", value=10000, step=1000)
@@ -438,7 +533,7 @@ with tabs[3]:
                    "Returns tab.")
 
 # ---- Compare ---- #
-with tabs[4]:
+with tabs[5]:
     section("Compare schemes")
     cmp_labels = st.multiselect("Schemes to compare (from this watchlist)",
                                 list(scheme_labels.keys()),
@@ -466,16 +561,115 @@ with tabs[4]:
             section("Trailing-return comparison (annualised where >1Y, else absolute)")
             table(R.compare_trailing(named))
 
-# ---- Watchlist ---- #
-with tabs[5]:
-    section(f"Manage “{active}”")
-    for c in codes:
-        cc1, cc2 = st.columns([6, 1])
-        cc1.write(f"{name_of(universe, c)}  ·  `{c}`")
-        if cc2.button("Remove", key=f"rm_{c}"):
-            store.remove(st.session_state.watchlists, active, c)
-            st.rerun()
-    st.caption(f"Watchlists are saved at: {store.WATCHLIST_FILE}")
+# ---- Peers (category benchmarking) ---- #
+with tabs[6]:
+    row = universe[universe["code"] == code]
+    peer_cat = row["category"].iloc[0] if not row.empty else None
+    if not peer_cat:
+        st.warning("This scheme isn't in the current AMFI universe, so its "
+                   "category peers can't be determined.")
+    else:
+        section(f"Benchmark against the category — {peer_cat}")
+        scheme_name_l = name_of(universe, code).lower()
+        f1, f2 = st.columns(2)
+        growth_only = f1.checkbox("Growth options only", value=True,
+                                  help="Excludes IDCW/dividend options so "
+                                       "each fund is counted once.")
+        plan = f2.radio("Plan", ["Direct", "Regular", "All"], horizontal=True,
+                        index=0 if "direct" in scheme_name_l else 1)
+
+        peers = universe[universe["category"] == peer_cat]
+        if growth_only:
+            peers = peers[peers["name"].str.contains("growth", case=False,
+                                                     na=False)]
+        if plan == "Direct":
+            peers = peers[peers["name"].str.contains("direct", case=False,
+                                                     na=False)]
+        elif plan == "Regular":
+            peers = peers[~peers["name"].str.contains("direct", case=False,
+                                                      na=False)]
+        # the selected scheme always stays in the set
+        if code not in peers["code"].values and not row.empty:
+            peers = pd.concat([peers, row])
+        st.caption(f"{len(peers):,} peer scheme(s) match. Histories are "
+                   "fetched once and cached for 6 hours.")
+
+        peer_key = (code, peer_cat, growth_only, plan)
+        cached = st.session_state.get("peer_result")
+        if st.button(f"Load returns for {len(peers):,} peers", type="primary"):
+            prog = st.progress(0.0, text="Fetching peer NAV histories…")
+            rows_p = []
+            for i, (_, r) in enumerate(peers.iterrows()):
+                try:
+                    s_p, _ = get_history(r["code"])
+                    snap = R.snapshot(s_p)
+                    if snap:
+                        rows_p.append({
+                            "Scheme": r["name"], "Code": int(r["code"]),
+                            "NAV": snap["nav"], "1Y trend": snap["spark"],
+                            "1D %": snap["chg_1d"], "1Y %": snap["1Y"],
+                            "3Y % pa": snap["3Y"], "5Y % pa": snap["5Y"],
+                            "Max DD %": snap["mdd"]})
+                except Exception:  # noqa: BLE001
+                    pass
+                prog.progress((i + 1) / len(peers))
+            prog.empty()
+            st.session_state.peer_result = (peer_key, rows_p)
+            cached = st.session_state.peer_result
+
+        if cached and cached[0] == peer_key and cached[1]:
+            peer_rows = cached[1]
+            pdf = pd.DataFrame(peer_rows)
+
+            # rank of the selected scheme within the category, per horizon
+            section("Category rank")
+            rks = st.columns(3)
+            pctiles = []
+            for i, col in enumerate(["1Y %", "3Y % pa", "5Y % pa"]):
+                vals = pdf[col].dropna()
+                mine = pdf.loc[pdf["Code"] == code, col]
+                if mine.empty or pd.isna(mine.iloc[0]) or vals.empty:
+                    rks[i].metric(col, "—")
+                    continue
+                v = mine.iloc[0]
+                rank = int((vals > v).sum()) + 1
+                pctile = (vals < v).mean() * 100
+                pctiles.append(f"{col}: beat {pctile:.0f}% of peers")
+                rks[i].metric(col, f"#{rank} of {len(vals)}")
+            st.caption("Rank 1 = best in category. "
+                       + (" · ".join(pctiles) if pctiles else ""))
+
+            section("Return distribution vs peers")
+            dfig = go.Figure()
+            for i, col in enumerate(["1Y %", "3Y % pa", "5Y % pa"]):
+                vals = pdf[col].dropna()
+                if vals.empty:
+                    continue
+                dfig.add_trace(go.Box(
+                    y=vals, name=col, boxpoints=False, showlegend=False,
+                    line=dict(color=MUTED, width=1),
+                    fillcolor="rgba(120,123,134,0.15)"))
+                mine = pdf.loc[pdf["Code"] == code, col]
+                if not mine.empty and pd.notna(mine.iloc[0]):
+                    dfig.add_trace(go.Scatter(
+                        x=[col], y=[mine.iloc[0]], mode="markers",
+                        marker=dict(color=ACCENT, size=11,
+                                    line=dict(color=TEXT, width=1)),
+                        name="This scheme", showlegend=(i == 0),
+                        hovertemplate="%{y:.2f}%<extra>This scheme</extra>"))
+            tv(dfig, 360, legend=True, unified=False, spikes=False)
+            chart(dfig)
+
+            section("Peer table")
+            snapshot_table(
+                sorted(peer_rows,
+                       key=lambda r: (r["3Y % pa"] is None
+                                      or pd.isna(r["3Y % pa"]),
+                                      -(r["3Y % pa"] or 0))),
+                highlight_code=code)
+        elif cached and cached[0] != peer_key:
+            st.info("Filters changed — reload peer returns to refresh "
+                    "the comparison.")
 
 st.divider()
 st.caption("Data: AMFI NAVAll.txt (universe + latest NAV) and api.mfapi.in "
