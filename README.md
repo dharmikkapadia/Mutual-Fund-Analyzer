@@ -36,11 +36,19 @@ python -m streamlit run app.py
 The launcher starts Streamlit headless via `python -m streamlit` (the reliable
 invocation when the Scripts dir isn't on PATH) and opens the browser.
 
+## Deploy (Streamlit Community Cloud)
+Point [share.streamlit.io](https://share.streamlit.io) at this repo with
+`app.py` as the main file — no other config needed. Watchlists are stored in
+each visitor's browser via localStorage (the ephemeral, shared server
+filesystem is automatically disabled there; set `AFP_BROWSER_ONLY=1` to force
+the same on other hosts). `AFP_NO_BROWSER_STORE=1` disables the browser sync
+entirely (used by headless tests).
+
 ## Features (v1)
 - **Watchlist dashboard** — sortable grid of every scheme in the active list: 1Y NAV sparkline, latest NAV, 1D/1Y/3Y/5Y returns and max drawdown, red/green coded.
 - **Risk ratios** — Sharpe and Sortino over a selectable 1Y/3Y/5Y/All window with a configurable risk-free rate, beside volatility and CAGR on the Overview.
 - **Category peers** — benchmark a scheme against its full AMFI category universe (e.g. a small-cap fund vs every other small-cap fund): rank and percentile per horizon, box-plot distribution with the scheme marked, and a sortable peer table. Growth-only and Direct/Regular plan filters keep the peer set honest; histories are fetched once on demand and cached.
-- **Watchlists** — multiple named lists, persisted at `~/.afp_nav_explorer/watchlists.json`.
+- **Watchlists** — multiple named lists, persisted in the **browser** (localStorage) so they survive cloud restarts and stay per-visitor; `~/.afp_nav_explorer/watchlists.json` remains as the desktop fallback / migration source.
 - **Point-to-point returns** — custom dates, financial-year (Apr–Mar) table, month-on-month table. Absolute always; CAGR shown when the span exceeds 1Y.
 - **Rolling returns** — 1/3/5Y daily-rolling, annualised, with distribution stats (min/max/median/avg, % negative, % above a hurdle, IQR) plus a histogram.
 - **Comparison** — any number of schemes overlaid as growth-of-₹100 from a common start (no min/max scaling rules), plus a trailing-return comparison table.

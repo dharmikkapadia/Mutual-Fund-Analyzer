@@ -1,37 +1,55 @@
 """
 store.py — local persistence for watchlists.
 
-The NAV history is pulled on-demand, but watchlists must survive between
-sessions, so they live in a small JSON file under the user's home directory:
+Watchlists primarily live in the *browser* (localStorage, synced by app.py),
+so they survive restarts on cloud deployments and stay per-visitor. This
+module is the desktop fallback / migration source: a small JSON file under
+the user's home directory:
     ~/.afp_nav_explorer/watchlists.json
 Shape: { "<list name>": [scheme_code, ...], ... }
+
+On Streamlit Community Cloud the filesystem is ephemeral and shared by every
+visitor, so file I/O is disabled there (BROWSER_ONLY) and the browser copy is
+the only store.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 APP_DIR = Path.home() / ".afp_nav_explorer"
 WATCHLIST_FILE = APP_DIR / "watchlists.json"
 
+# Streamlit Community Cloud sets HOSTNAME=streamlit; AFP_BROWSER_ONLY=1
+# forces browser-only storage on any other host.
+BROWSER_ONLY = (os.getenv("HOSTNAME") == "streamlit"
+                or os.getenv("AFP_BROWSER_ONLY", "") == "1")
+
+DEFAULT = {"My Watchlist": []}
+
 
 def _ensure() -> None:
     APP_DIR.mkdir(parents=True, exist_ok=True)
     if not WATCHLIST_FILE.exists():
-        WATCHLIST_FILE.write_text(json.dumps({"My Watchlist": []}, indent=2))
+        WATCHLIST_FILE.write_text(json.dumps(DEFAULT, indent=2))
 
 
 def load() -> dict:
+    if BROWSER_ONLY:
+        return {k: list(v) for k, v in DEFAULT.items()}
     _ensure()
     try:
         data = json.loads(WATCHLIST_FILE.read_text())
         return {k: [int(c) for c in v] for k, v in data.items()}
     except (json.JSONDecodeError, ValueError):
-        return {"My Watchlist": []}
+        return {k: list(v) for k, v in DEFAULT.items()}
 
 
 def save(watchlists: dict) -> None:
+    if BROWSER_ONLY:
+        return
     _ensure()
     WATCHLIST_FILE.write_text(json.dumps(watchlists, indent=2))
 

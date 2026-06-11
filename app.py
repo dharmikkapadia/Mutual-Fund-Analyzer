@@ -11,11 +11,14 @@ Run via the customtkinter launcher, or directly:
 from __future__ import annotations
 
 import datetime as dt
+import json
+import os
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from streamlit_js_eval import streamlit_js_eval
 
 import nav_data as D
 import returns as R
@@ -73,6 +76,7 @@ st.markdown(f"""
   .stTabs [aria-selected="true"] {{color: {TEXT};}}
 
   [data-testid="stDataFrame"] {{font-variant-numeric: tabular-nums;}}
+  [data-testid="stCustomComponentV1"] {{display: none;}}
   [data-testid="stSidebar"] {{border-right: 1px solid {GRID};}}
   [data-testid="stSidebar"] .block-container {{padding-top: 1.2rem;}}
   hr {{border-color: {GRID};}}
@@ -163,12 +167,41 @@ def pct(x):
 
 
 # --------------------------------------------------------------------------- #
-# Session state
+# Session state — watchlists live in the browser (localStorage) so they
+# survive restarts on cloud deployments and stay per-visitor. The JSON file
+# (store.py) is the desktop fallback and one-time migration source.
+# AFP_NO_BROWSER_STORE=1 disables the browser sync (used by headless tests).
 # --------------------------------------------------------------------------- #
+LS_KEY = "afp_watchlists_v1"
+USE_BROWSER_STORE = os.getenv("AFP_NO_BROWSER_STORE", "") != "1"
+
 if "watchlists" not in st.session_state:
-    st.session_state.watchlists = store.load()
+    boot = None
+    if USE_BROWSER_STORE:
+        raw = streamlit_js_eval(
+            js_expressions=f"localStorage.getItem('{LS_KEY}') || '__empty__'",
+            key="ls_read")
+        if raw is None:
+            # Component round-trip pending; the value arriving triggers a rerun.
+            st.caption("Loading saved watchlists…")
+            st.stop()
+        if raw != "__empty__":
+            try:
+                boot = {str(k): [int(c) for c in v]
+                        for k, v in json.loads(raw).items()}
+            except (ValueError, TypeError, AttributeError):
+                boot = None
+    st.session_state.watchlists = boot or store.load()
 if "active_list" not in st.session_state:
     st.session_state.active_list = next(iter(st.session_state.watchlists))
+
+if USE_BROWSER_STORE:
+    # Write-through mirror: re-runs only when the payload changes.
+    _payload = json.dumps(st.session_state.watchlists, separators=(",", ":"))
+    streamlit_js_eval(
+        js_expressions=f"localStorage.setItem('{LS_KEY}', "
+                       f"{json.dumps(_payload)})",
+        key="ls_write")
 
 try:
     universe = get_universe()
@@ -352,7 +385,10 @@ with tabs[0]:
         if cc2.button("Remove", key=f"rm_{c}"):
             store.remove(st.session_state.watchlists, active, c)
             st.rerun()
-    st.caption(f"Watchlists are saved at: {store.WATCHLIST_FILE}")
+    st.caption("Watchlists are saved in this browser (localStorage), so "
+               "they persist across sessions and cloud restarts."
+               + ("" if store.BROWSER_ONLY else
+                  f" A local backup is kept at {store.WATCHLIST_FILE}."))
 
 # ---- Overview ---- #
 with tabs[1]:
