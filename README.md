@@ -4,6 +4,13 @@ A mutual-fund NAV viewer and returns analyser for the full AMFI universe.
 Streamlit core (the analytics + UI) with a customtkinter launcher so it opens
 like a desktop app inside the AFP suite.
 
+## UI
+Minimal dark theme inspired by TradingView (slate background `#131722`,
+high-contrast text, crosshair hover, right-side axes, 1M/6M/YTD/1Y/3Y/5Y/All
+range buttons, red/green gain-loss semantics). The Streamlit theme lives in
+`.streamlit/config.toml`; chart styling is centralised in the `tv()` helper
+in `app.py` so every chart shares one template.
+
 ## Data sources
 | Source | Role |
 |---|---|
@@ -43,6 +50,7 @@ invocation when the Scripts dir isn't on PATH) and opens the browser.
 - `store.py` — watchlist persistence.
 - `app.py` — Streamlit UI.
 - `launcher.py` — customtkinter desktop launcher.
+- `.streamlit/config.toml` — dark theme tokens for native Streamlit widgets.
 
 ## Roadmap (phase 2, scoped but not built)
 - Sharpe / Sortino (needs a configurable risk-free rate — wire from your CCIL/T-bill work).

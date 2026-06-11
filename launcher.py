@@ -19,7 +19,8 @@ import webbrowser
 
 import customtkinter as ctk
 
-NAVY, ORANGE, BLUE = "#141413", "#D97757", "#6A9BCC"
+BG, PANEL, TEXT, MUTED, ACCENT = ("#131722", "#1E222D", "#D1D4DC",
+                                  "#787B86", "#2962FF")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = 8501
 
@@ -36,27 +37,30 @@ class Launcher(ctk.CTk):
         self.proc = None
         self.title("AFP NAV Explorer")
         self.geometry("440x300")
-        ctk.set_appearance_mode("light")
-        self.configure(fg_color="#FFFFFF")
+        ctk.set_appearance_mode("dark")
+        self.configure(fg_color=BG)
 
         ctk.CTkLabel(self, text="ARTHASHASTRA FINSEC",
-                     text_color=ORANGE,
-                     font=ctk.CTkFont(size=12, weight="bold")).pack(pady=(26, 0))
-        ctk.CTkLabel(self, text="NAV Explorer", text_color=NAVY,
+                     text_color=MUTED,
+                     font=ctk.CTkFont(size=11, weight="bold")).pack(pady=(26, 0))
+        ctk.CTkLabel(self, text="NAV Explorer", text_color=TEXT,
                      font=ctk.CTkFont(size=26, weight="bold")).pack(pady=(0, 4))
         ctk.CTkLabel(self, text="Mutual-fund NAV, returns & rolling analysis",
-                     text_color="#666").pack(pady=(0, 18))
+                     text_color=MUTED).pack(pady=(0, 18))
 
         self.start_btn = ctk.CTkButton(self, text="▶  Launch app",
-                                       fg_color=ORANGE, hover_color="#E8702A",
+                                       fg_color=ACCENT, hover_color="#1E53E5",
+                                       text_color="#FFFFFF",
                                        height=42, command=self.start)
         self.start_btn.pack(pady=6, padx=40, fill="x")
-        self.stop_btn = ctk.CTkButton(self, text="■  Stop", fg_color=NAVY,
-                                      hover_color="#333", height=36,
+        self.stop_btn = ctk.CTkButton(self, text="■  Stop", fg_color=PANEL,
+                                      hover_color="#2A2E39", text_color=TEXT,
+                                      border_color="#2A2E39", border_width=1,
+                                      height=36,
                                       command=self.stop, state="disabled")
         self.stop_btn.pack(pady=6, padx=40, fill="x")
 
-        self.status = ctk.CTkLabel(self, text="Idle.", text_color=BLUE)
+        self.status = ctk.CTkLabel(self, text="Idle.", text_color=MUTED)
         self.status.pack(pady=14)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
