@@ -178,8 +178,10 @@ def isin_of(univ: pd.DataFrame, code: int) -> str:
     return isin if isinstance(isin, str) and len(isin) >= 8 else ""
 
 
-def links_md(name: str) -> str:
-    return (f"[Rupeevest]({H.rupeevest_link(name)}) · "
+def links_md(name: str, rv_code=None) -> str:
+    rv = (H.rupeevest_scheme_link(rv_code) if rv_code
+          else H.rupeevest_link(name))
+    return (f"[Rupeevest]({rv}) · "
             f"[Factsheet]({H.factsheet_link(name)}) · "
             f"[ValueResearch]({H.valueresearch_link(name)})")
 
@@ -554,7 +556,9 @@ with tabs[1]:
             st.markdown(f"**Fund manager(s)**<br>"
                         f"{facts.get('managers') or '—'}",
                         unsafe_allow_html=True)
-        st.caption(f"Source: {facts_src} · {links_md(sch_name)}")
+        st.caption(f"Source: {facts_src} · "
+                   + links_md(sch_name, port.get("rv_schemecode")
+                              if facts_src == "Rupeevest" else None))
     else:
         st.caption("Live fund facts (AUM, manager) are unavailable right "
                    f"now — use the links: {links_md(sch_name)}")
@@ -719,11 +723,11 @@ with tabs[5]:
 # ---- Holdings (portfolio overlap) ---- #
 with tabs[6]:
     section("Portfolio holdings & overlap")
-    st.caption("Holdings and fund facts come from public Groww/Kuvera "
-               "endpoints (Rupeevest has no public API, so it's linked per "
-               "scheme instead). Portfolios update monthly with AMC "
-               "disclosures. If a fetch fails you can upload a holdings CSV "
-               "below.")
+    st.caption("Holdings and fund facts come from Rupeevest's own API "
+               "(matched from AMFI names to its scheme codes), with "
+               "Groww/Kuvera as fallbacks. Portfolios update monthly with "
+               "AMC disclosures. If a fetch fails you can upload a holdings "
+               "CSV below.")
     hl_labels = st.multiselect("Schemes (from this watchlist)",
                                list(scheme_labels.keys()),
                                default=[chosen_label], key="hold_pick")
@@ -778,7 +782,8 @@ with tabs[6]:
                     f"manager: {f['managers']}" if f.get("managers") else None,
                     f"({d.get('source', '?')})"]
             st.markdown(" · ".join(b for b in bits if b) + "  \n"
-                        + links_md(n), unsafe_allow_html=True)
+                        + links_md(n, d.get("rv_schemecode")),
+                        unsafe_allow_html=True)
 
     if len(hmap) >= 2:
         section("Overlap % (sum of overlapping weights)")
