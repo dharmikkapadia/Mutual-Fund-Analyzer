@@ -168,8 +168,8 @@ def get_history(code: int):
 
 
 @st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
-def get_portfolio(isin: str, name: str) -> dict:
-    return H.fetch_portfolio(isin, name)
+def get_portfolio(isin: str, name: str, amfi_code: int | None = None) -> dict:
+    return H.fetch_portfolio(isin, name, amfi_code)
 
 
 def isin_of(univ: pd.DataFrame, code: int) -> str:
@@ -540,7 +540,7 @@ with tabs[1]:
     sch_name = name_of(universe, code)
     facts, facts_src = {}, None
     try:
-        port = get_portfolio(isin_of(universe, code), sch_name)
+        port = get_portfolio(isin_of(universe, code), sch_name, code)
         facts, facts_src = port.get("facts", {}), port.get("source")
     except Exception:  # noqa: BLE001
         pass
@@ -741,7 +741,7 @@ with tabs[6]:
             c = scheme_labels[lbl]
             try:
                 st.session_state.holdings_data[lbl] = get_portfolio(
-                    isin_of(universe, c), name_of(universe, c))
+                    isin_of(universe, c), name_of(universe, c), c)
             except Exception as e:  # noqa: BLE001
                 errs.append(f"{lbl.split('  ·')[0]}: {e}")
             prog.progress((i + 1) / len(hl_labels))

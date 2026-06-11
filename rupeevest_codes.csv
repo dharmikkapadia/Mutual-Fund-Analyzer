@@ -1,0 +1,622 @@
+rupeevest_code,fund_name,amfi_code
+23,Baroda BNP Paribas Large Cap,150185
+172,Baroda BNP Paribas Midcap,153001
+226,Baroda BNP Paribas ELSS Tax Saver,150156
+277,Aditya Birla SL Large & Mid Cap Fund-Reg(G),
+301,Aditya Birla SL Dividend Yield,101738
+409,Aditya Birla SL Consumption,103111
+413,Aditya Birla SL Infrastructure Fund(G),
+417,Aditya Birla SL Mid Cap Plan,101591
+425,Aditya Birla SL MNC Fund-Reg(G),
+445,Aditya Birla SL Flexi Cap Fund-Reg(G),
+447,Aditya Birla SL Large Cap,100313
+477,Aditya Birla SL Small Cap Fund(G),
+482,Aditya Birla SL Digital India,103168
+489,Aditya Birla SL Focused Fund(G),
+500,Baroda BNP Paribas Multi Cap,153548
+523,Canara Rob Large and Mid Cap Fund-Reg(G),
+526,Canara Robeco Flexi Cap,101922
+547,Canara Robeco Infrastructure,103390
+594,HSBC Infrastructure Fund-Reg(G),
+611,HSBC Midcap,151034
+642,DSP Flexi Cap Fund-Reg(G),
+698,DSP India T.I.G.E.R.,102434
+714,DSP Small Cap,105989
+716,DSP Large & Mid Cap,103819
+735,DSP Midcap,150427
+745,DSP ELSS Tax Saver,104772
+748,DSP Large Cap,101635
+758,PGIM India Large Cap Fund(G),
+845,PGIM India Equity Savings Fund(G),
+871,Quant Multi Cap Fund(G),
+874,Quant Large & Mid Cap Fund(G),
+876,Quant Small Cap Fund(G),
+881,Quant Infrastructure Fund(G),
+887,Quant Mid Cap Fund(G),
+889,Quant ELSS Tax Saver Fund(G),
+927,HSBC ELSS Tax Saver,151076
+931,Franklin India Large Cap,118531
+933,Franklin India Large & Mid Cap,102883
+938,Franklin India Focused Equity,105646
+946,Franklin India Opportunities,100563
+948,Franklin India Mid Cap,118532
+950,Franklin India Flexi Cap,100520
+952,Franklin India Small Cap,100567
+957,Franklin India ELSS Tax Saver,100526
+961,Franklin India Technology Fund(G),
+1112,HDFC Value,100382
+1129,HDFC Focused,133527
+1131,HDFC Flexi Cap,101762
+1305,HDFC Mid Cap,100377
+1309,HDFC Equity Savings Fund(G),
+1329,HDFC ELSS Tax saver,101979
+1331,HDFC Large Cap,102000
+1348,HSBC Large Cap,101594
+1441,HSBC Flexi Cap,102252
+1462,HSBC Tax Saver Equity Fund(G),
+1492,ICICI Pru Value,112104
+1499,ICICI Pru MidCap,100643
+1517,ICICI Pru FMCG Fund(G),
+1608,ICICI Pru Large & Mid Cap Fund(G),
+1625,ICICI Pru Smallcap Fund(G),
+1629,ICICI Pru Infrastructure,102047
+1677,ICICI Pru Multicap Fund(G),
+1680,ICICI Pru Exports & Services Fund(G),
+1694,ICICI Pru ELSS Tax Saver,100645
+1695,ICICI Pru Technology Fund(G),
+1849,JM Value,100254
+1858,JM Large Cap,100219
+1956,Edelweiss Large & Mid Cap,149341
+1962,Kotak Large Cap Fund(G),
+1973,Kotak Contra,103040
+1977,Kotak Midcap,152765
+2066,Kotak Small Cap Fund(G),
+2069,Kotak Large & Midcap,103234
+2075,Kotak ELSS Tax Saver,103339
+2088,LIC MF Childrens Fund-Reg(G),
+2090,LIC MF Flexi Cap Fund-Reg(G),
+2127,LIC Large Cap,133711
+2153,LIC MF ELSS Tax Saver-Reg(G),
+2169,Invesco India Contra,105460
+2235,Invesco India Large & Mid Cap Fund-Reg(G),
+2237,Invesco India Infrastructure,106654
+2259,Invesco India Mid Cap,106144
+2270,Invesco India ELSS Tax Saver,104636
+2271,HDFC Large And Mid Cap,100370
+2337,Sundaram Dividend Yield Fund(G),
+2370,Sundaram Multi Cap Fund(G),
+2390,Sundaram Focused Fund(G),
+2393,Sundaram Equity Savings Fund(G),
+2433,Sundaram ELSS Tax Saver,149569
+2445,Nippon India Banking & Financial Services,154095
+2452,Nippon India Power & Infra,100808
+2455,Nippon India Large Cap,100799
+2466,Nippon India Multi Cap,100803
+2573,Nippon India Growth Mid Cap,100804
+2641,Nippon India Focused,105829
+2644,Nippon India Consumption Fund(G),
+2659,Nippon India Pharma Fund(G),
+2662,Nippon India Value,148719
+2667,Nippon India ELSS Tax Saver,100806
+2669,Nippon India Vision Large & Mid Cap,100813
+2711,SBI Large Cap,103504
+2743,SBI Infrastructure Fund-Reg(G),
+2750,SBI Comma,103145
+2752,SBI ESG Exclusionary Strategy Fund-Reg(G),
+2766,SBI MNC,103034
+2789,SBI Midcap,150672
+2799,SBI Flexi Cap,100350
+2801,SBI Large & Midcap,103024
+2809,SBI Contra,102414
+2813,SBI Healthcare Opp Fund-Reg(G),
+2815,SBI ELSS Tax Saver,105628
+2817,SBI Focused Fund-Reg(G),
+2858,Bandhan Large & Mid Cap,108596
+2860,Bandhan Large Cap Fund-Reg(G),
+2896,Bandhan Focused Fund-Reg(G),
+2906,Bandhan Flexi Cap,108594
+2945,Sundaram Infrastructure Advantage,129213
+2947,Sundaram Large and Mid Cap Fund(G),
+3050,Sundaram Consumption,102142
+3052,Sundaram Small Cap Fund(G),
+3067,Sundaram Mid Cap,101539
+3072,Sundaram Value,133318
+3096,Tata Large & Mid Cap,101823
+3098,Tata Value,143837
+3237,Tata Mid Cap Fund-Reg(G),
+3254,Tata Infrastructure Fund-Reg(G),
+3273,Tata Equity Savings Fund-Reg(G),
+3281,Tata Large Cap,101824
+3283,Tata Ethical,100415
+3304,Tata Childrens Fund-Reg(G),
+3305,Taurus Large Cap Fund-Reg(G),
+3306,Taurus Mid Cap Fund-Reg(G),
+3308,Taurus Infrastructure Fund-Reg(G),
+3314,Taurus ELSS Tax Saver Fund-Reg(G),
+3317,Taurus Flexi Cap Fund-Reg(G),
+3367,Franklin India Dividend Yield,100561
+3379,Templeton India Value,100496
+3435,UTI Transportation & Logistics Fund-Reg(G),
+3439,UTI Banking and Financial Services,134016
+3450,UTI Childrens Equity Fund(G),
+3454,UTI Dividend Yield Plan,148948
+3461,UTI Flexi Cap,100521
+3462,UTI ELSS Tax Saver Fund-Reg(G),
+3581,UTI India Consumer,106425
+3582,UTI Infrastructure Fund-Reg(G),
+3617,UTI MEPUS,
+3626,UTI Large Cap,100651
+3628,UTI Mid Cap Fund-Reg(G),
+3634,UTI MNC,100740
+3644,UTI Value,151738
+3646,UTI Healthcare,100807
+3790,Edelweiss Mid Cap,140225
+4198,JM ELSS Tax Saver Fund(G),
+4228,Kotak Infra & Eco Reform Fund(G),
+4253,HDFC Infrastructure,107524
+4256,Invesco India Multicap Fund-Reg(G),
+4270,Bandhan Value,108909
+4282,JM Focused Fund-Reg(G),
+4324,LIC MF Infra Fund-Reg(G),
+4453,Aditya Birla SL Value,100319
+4455,HDFC Small Cap Fund-Reg(G),
+4457,Mirae Asset Large Cap,107578
+4584,DSP Natural Res & New Energy Fund-Reg(G),
+4637,Aditya Birla SL ELSS Tax Saver,100318
+4980,ICICI Pru Large Cap,100641
+5144,Sundaram Fin Serv Opp Fund(G),
+5153,Nippon India Quant Fund(G),
+5300,Bandhan Equity Savings Fund-Reg(G),
+5348,Invesco India Financial Services,108378
+5736,ICICI Pru Banking & Fin Serv Fund(G),
+5742,Quant Focused Fund(G),
+6075,JM Flexi Cap,109522
+6305,Quant Flexi Cap Fund(G),
+6434,Bank of India Large & Mid Cap Fund-Reg(G),
+7433,Bandhan ELSS Tax saver,111569
+7516,Bank of India ELSS Tax Saver-Reg(G),
+7545,Edelweiss ELSS Tax saver Fund-Reg(G),
+7600,Canara Robeco ELSS Tax Saver,111722
+7615,Taurus Ethical Fund-Reg(G),
+7747,ICICI Pru Focused Equity Fund(G),
+7785,Edelweiss Large Cap,140172
+7864,Franklin Build India Fund(G),
+7870,Invesco India Largecap,112098
+7874,Kotak Flexi Cap,112090
+7876,Canara Robeco Consumer Trends,112152
+7885,SBI Small Cap Fund-Reg(G),
+7996,Invesco India PSU Equity Fund-Reg(G),
+8217,Canara Robeco Large Cap,113221
+8250,Axis Large Cap,112277
+8262,HSBC Value,151110
+8408,Axis ELSS Tax Saver,112323
+8463,DSP Focused Fund-Reg(G),
+8484,Bank of India Mfg & Infra Fund-Reg(G),
+9252,SBI PSU Fund-Reg(G),
+9767,Mirae Asset Large & Midcap,112932
+12459,Bandhan Infrastructure Fund-Reg(G),
+12758,Nippon India Small Cap,113177
+12894,LIC MF Equity Savings Fund(G),
+13049,Axis Midcap,149938
+14314,Mirae Asset Great Consumer,114931
+14559,Union Flexi Cap,115270
+14893,Union ELSS Tax Saver,145952
+15063,Taurus Banking & Fin Serv Fund-Reg(G),
+15304,HSBC Equity Savings Fund-Reg(G),
+15380,Tata Retirement Savings Progresive,115942
+15557,Axis Focused,117560
+15717,Union Small Cap,129647
+15997,Groww Largecap Fund-Reg(G),
+16672,UTI Large & Mid Cap,100664
+16955,Baroda BNP Paribas Banking and Fin Serv Fund-Reg(G),
+17164,Nippon India Retirement Fund-Wealth Creation(G),
+17168,Baroda BNP Paribas India Consumption Fund-Reg(G),
+17588,ICICI Pru Dividend Yield Equity,100650
+19166,SBI Consumption Opp Fund-Reg(G),
+19247,SBI Technology Opp Fund-Reg(G),
+19759,Quantum Value Fund-Reg(G),
+19878,Quantum ELSS Tax Saver Fund-Reg(G),
+19955,LIC MF Banking & Financial Services Fund-Reg(G),
+21520,Parag Parikh Flexi Cap,122640
+21651,Axis Small Cap Fund-Reg(G),
+21769,Motilal Oswal Focused,122387
+22068,Union Focused Fund-Reg(G),
+22139,HSBC Small Cap Fund-Reg(G),
+22533,Motilal Oswal Midcap,147701
+24150,Aditya Birla SL Banking and Financial Services,125595
+24741,PGIM India Midcap,152383
+24803,HDFC Retirement Savings Fund-Equity Plan-Reg(G),
+25667,ICICI Pru Retirement Fund-Pure Equity Plan(G),
+26481,Motilal Oswal Flexi Cap,129048
+26780,PGIM India ELSS Tax Saver Regular,135598
+29553,HSBC Business Cycles Fund-Reg(G),
+30046,360 ONE Focused Fund-Reg(G),
+30125,SBI Banking & Financial Services Fund-Reg(G),
+30398,SBI Retirement Benefit Fund-Aggressive Plan-Reg(G),
+30690,Kotak Equity Savings Fund(G),
+30730,Edelweiss Equity Savings Fund-Reg(G),
+30757,Aditya Birla SL Equity Savings Fund-Reg(G),
+30774,Aditya Birla SL Mfg. Equity Fund-Reg(G),
+30963,Nippon India Equity Savings Fund(G),
+31025,Tata ELSS,132757
+31189,Motilal Oswal ELSS Tax Saver,133385
+31230,ICICI Pru Equity Savings Fund-Reg(G),
+31642,PGIM India Flexi Cap,133836
+31778,Edelweiss Flexi Cap Fund-Reg(G),
+31897,Navi Large & Midcap Fund-Reg(G),
+31950,LIC MF Large & Midcap Fund-Reg(G),
+32077,ICICI Pru Manufacturing Fund(G),
+32078,Aditya Birla SL Retirement Fund-30-Reg(G),
+32452,Baroda BNP Paribas Focused,150263
+32627,LIC MF Focused Fund-Reg(G),
+32632,Navi ELSS Tax Saver Fund-Reg(G),
+32901,SBI Equity Savings Fund-Reg(G),
+33066,Union Largecap Fund-Reg(G),
+33370,Axis Equity Savings Fund-Reg(G),
+33536,Mirae Asset ELSS Tax Saver,135784
+33606,Groww Value Fund-Reg(G),
+33726,Tata Banking and Financial Services,135794
+33727,Tata Digital India Fund-Reg(G),
+33728,Tata India Consumer Fund-Reg(G),
+33729,Tata India Pharma & Healthcare Fund-Reg(G),
+33731,Tata Resources & Energy Fund-Reg(G),
+33878,SBI Equity Minimum Variance Fund-Reg(G),
+34871,DSP Equity Savings Fund-Reg(G),
+35200,Sundaram Business Cycle Fund-Reg(G),
+35242,Tata Small Cap Fund-Reg(G),
+35818,UTI Equity Savings Fund-Reg(G),
+36002,DSP Healthcare Fund-Reg(G),
+36026,Sundaram LT Micro Cap Tax Adv Fund-Sr III-Reg(G),
+36058,Mahindra Manulife ELSS Tax Saver Fund-Reg(G),
+36348,LIC MF Midcap Fund-Reg(G),
+36380,Sundaram LT Micro Cap Tax Adv Fund-Sr IV-Reg(G),
+36398,ICICI Pru Pharma Healthcare & Diagnostics (P.H.D) Fund-(G),
+36401,Mahindra Manulife Multi Cap,141224
+36671,Mahindra Manulife Equity Savings Fund-Reg(G),
+36734,SBI LT Advantage Fund-IV-Reg(G),
+36903,Sundaram LT Micro Cap Tax Adv Fund-Sr V-Reg(G),
+36914,LIC MF Small Cap Fund-Reg(G),
+37591,Aditya Birla SL Pharma & Healthcare Fund-Reg(G),
+37759,HDFC Banking & Financial Services Fund-Reg(G),
+37849,Sundaram Services Fund-Reg(G),
+37867,Sundaram LT Micro Cap Tax Adv Fund-Sr VI-Reg(G),
+37922,Mahindra Manulife Small Cap Fund-Reg(G),
+38073,Mahindra Manulife Large Cap Fund-Reg(G),
+38076,Bank of India Midcap Tax Fund-Sr 1-Reg(G),
+38080,Axis Large & Mid Cap,145111
+38133,Groww ELSS Tax Saver Fund-Reg(G),
+38212,Axis Flexi Cap Fund-Reg(G),
+38242,HDFC Housing Opp Fund-Reg(G),
+38291,SBI LT Advantage Fund-V-Reg(G),
+38299,ICICI Pru LT Wealth Enhancement Fund(G),
+38374,Sundaram LT Tax Adv Fund-Sr III-Reg(G),
+38375,Edelweiss Recently Listed IPO Fund-Reg(G),
+38444,Mahindra Manulife Mid Cap,142109
+38749,Mahindra Manulife Consumption Fund-Reg(G),
+38781,Shriram Flexi Cap Fund-Reg(G),
+39122,Mirae Asset Healthcare,143785
+39283,Tata Flexi Cap Fund-Reg(G),
+39388,Sundaram LT Tax Adv Fund-Sr IV-Reg(G),
+39401,Mirae Asset Equity Savings Fund-Reg(G),
+39495,SBI LT Advantage Fund-VI-Reg(G),
+39516,Navi Flexi Cap Fund-Reg(G),
+39645,Franklin India Equity Savings Fund(G),
+39956,LIC MF Value Fund-Reg(G),
+39958,Bank of India Midcap Tax Fund-Sr 2-Reg(G),
+40339,Invesco India Smallcap,145139
+40559,Edelweiss Small Cap Fund-Reg(G),
+40627,Union Equity Savings Fund-Reg(G),
+41323,Bank of India Small Cap Fund-Reg(G),
+41330,LIC MF Healthcare Fund-Reg(G),
+41332,LIC MF Dividend Yield Fund-Reg(G),
+41375,Aditya Birla SL Bal Bhavishya Yojna-Reg(G),
+41505,Invesco India Equity Savings Fund-Reg(G),
+41740,Union Value,145471
+41744,Shriram ELSS Tax Saver Fund-Reg(G),
+41946,ICICI Pru Bharat Consumption Fund-Reg(G),
+41965,ICICI Pru MNC Fund(G),
+41999,ICICI Pru Commodities Fund-Reg(G),
+42140,ICICI Pru India Opp Fund(G),
+42237,DSP Quant Fund-Reg(G),
+42342,Bandhan Small Cap,147944
+42350,Canara Robeco Small Cap,146127
+42577,Parag Parikh ELSS Tax Saver Fund-Reg(G),
+42701,HSBC Large & Mid Cap,146771
+42783,Baroda BNP Paribas Equity Savings Fund-Reg(G),
+42803,Motilal Oswal Large & Midcap Fund-Reg(G),
+42805,ICICI Pru Quant Fund(G),
+42898,Mirae Asset Focused,147203
+43349,Mirae Asset Mid Cap,147479
+43408,ITI Multi-Cap Fund-Reg(G),
+43788,Aditya Birla SL PSU Equity Fund-Reg(G),
+43844,Edelweiss Technology Fund-Reg(G),
+43846,Union Multicap Fund-Reg(G),
+43878,Quantum ESG Best In Class Strategy Fund-Reg(G),
+43915,Mahindra Manulife Large & Mid Cap Fund-Reg(G),
+43916,Baroda BNP Paribas ESG Best-in-class Strategy Fund-Reg(G),
+43927,Kotak Pioneer,147724
+43968,Kotak Focused,147477
+44014,ITI ELSS Tax Saver Fund-Reg(G),
+44087,ICICI Pru ESG Exclusionary Strategy Fund(G),
+44146,ICICI Pru Business Cycle Fund(G),
+44147,Kotak ESG Exclusionary Strategy Fund-Reg(G),
+44148,Tata Focused Fund-Reg(G),
+44222,Baroda BNP Paribas Large & Mid Cap Fund-Reg(G),
+44293,DSP Value Fund-Reg(G),
+44300,Union Large & Midcap Fund-Reg(G),
+44313,Union MidCap,148071
+44315,Axis Innovation Fund-Reg(G),
+44329,Axis Quant Fund-Reg(G),
+44397,Sundaram Large Cap,148504
+44399,ITI Small Cap Fund-Reg(G),
+44400,ITI Large Cap Fund-Reg(G),
+44436,PGIM India Retirement Fund-Reg(G),
+44495,Axis ESG Integration Strategy Fund-Reg(G),
+44511,UTI Small Cap,148617
+44736,Aditya Birla SL ESG Integration Strategy Fund-Reg(G),
+44739,HSBC Focused Fund-Reg(G),
+44987,Bank of India Flexi Cap Fund-Reg(G),
+45058,Invesco India Focused,148483
+45096,Aditya Birla SL Special Opp Fund-Reg(G),
+45130,Quant ESG Integration Strategy Fund-Reg(G),
+45141,Mahindra Manulife Focused Fund-Reg(G),
+45174,Mirae Asset Banking and Financial Services,148621
+45197,HDFC Dividend Yield,148560
+45314,ITI Mid Cap Fund-Reg(G),
+45335,Nippon India Flexi Cap Fund-Reg(G),
+45336,Kotak Multicap Fund-Reg(G),
+45348,Invesco India ESG Integration Strategy Fund-Reg(G),
+45362,Axis Multicap Fund-Reg(G),
+45373,Tata Business Cycle Fund-Reg(G),
+45374,Tata Dividend Yield Fund-Reg(G),
+45382,ITI Value Fund-Reg(G),
+45476,Aditya Birla SL Multi-Cap Fund-Reg(G),
+45480,Quant Quantamental Fund-Reg(G),
+45492,ICICI Pru Flexicap Fund(G),
+45510,Canara Robeco Focused,148884
+45571,Bank of India Large Cap Fund-Reg(G),
+45616,PGIM India Small Cap,149020
+45670,Mahindra Manulife Flexi Cap Fund-Reg(G),
+45685,UTI Focused Fund-Reg(G),
+45686,Baroda BNP Paribas Business Cycle Fund-Reg(G),
+45720,ITI Banking & Financial Services Fund-Reg(G),
+45721,ITI Flexi Cap Fund-Reg(G),
+45722,ITI Focused Fund-Reg(G),
+45724,ITI Pharma & Healthcare Fund-Reg(G),
+45727,Union Innovation & Opp Fund-Reg(G),
+45733,Aditya Birla SL Business Cycle Fund-Reg(G),
+45735,Union Retirement Fund-Reg(G),
+45838,Axis Value,149167
+45867,Bandhan Multi Cap Fund-Reg(G),
+45868,Bandhan Midcap Fund-Reg(G),
+45945,Invesco India Flexi Cap Fund-Reg(G),
+45995,ICICI Pru Nifty Auto Index Fund-Reg(G),
+46001,Canara Rob Mid Cap Fund-Reg(G),
+46015,360 ONE Quant Fund-Reg(G),
+46055,Edelweiss Focused Fund-Reg(G),
+46058,NJ ELSS Tax Saver Scheme-Reg(G),
+46064,Quant Value Fund-Reg(G),
+46093,HDFC Multi Cap Fund-Reg(G),
+46107,Kotak Manufacture in India Fund-Reg(G),
+46115,Bank of India Multi Cap Fund-Reg(G),
+46217,Samco Flexi Cap Fund-Reg(G),
+46357,HDFC Consumption Fund-Reg(G),
+46367,WOC Flexi Cap Fund-Reg(G),
+46370,Canara Rob Multi Cap Fund-Reg(G),
+46405,SBI Multicap Fund-Reg(G),
+46445,HDFC Business Cycle Fund-Reg(G),
+46472,Kotak Business Cycle,150626
+46546,ICICI Pru Housing Opp Fund-Reg(G),
+46585,HDFC Defence Fund-Reg(G),
+46606,Samco ELSS Tax Saver Fund-Reg(G),
+46622,Sundaram Flexi Cap Fund-Reg(G),
+46624,LIC MF Multi Cap Fund-Reg(G),
+46629,Kotak Banking & Financial Services,151381
+46678,Quant Large Cap Fund-Reg(G),
+46699,Baroda BNP Paribas Flexi Cap Fund-Reg(G),
+46764,Tata Housing Opportunities Fund-Reg(G),
+46769,WOC Mid Cap Fund-Reg(G),
+46773,WOC ELSS Tax Saver Fund-Reg(G),
+46979,ICICI Pru Transportation and Logistics Fund-Reg(G),
+46986,Bandhan Transportation and Logistics Fund-Reg(G),
+47079,WOC Large Cap Fund-Reg(G),
+47089,JM Midcap Fund-Reg(G),
+47224,ICICI Pru Nifty Pharma Index Fund-Reg(G),
+47272,HSBC Multi Cap Fund-Reg(G),
+47302,360 ONE ELSS Tax Saver Nifty 50 Index Fund-Reg(G),
+47332,ICICI Pru Nifty Commodities ETF,
+47389,Bandhan Financial Services,151818
+47480,Tata Multicap Fund-Reg(G),
+47567,360 ONE Flexicap Fund-Reg(G),
+47579,Invesco India Manufacturing Fund-Reg(G),
+47580,Axis Business Cycles Fund-Reg(G),
+47596,Mirae Asset Flexi Cap Fund-Reg(G),
+47648,HDFC MNC Fund-Reg(G),
+47653,SBI Dividend Yield Fund-Reg(G),
+47657,Navi ELSS Tax Saver Nifty 50 Index Fund-Reg(G),
+47753,Samco Active Momentum Fund-Reg(G),
+47918,ICICI Pru Innovation,151579
+47940,Baroda BNP Paribas Value,151747
+47948,Kotak Consumption Fund-Reg(G),
+47949,Kotak Healthcare Fund-Reg(G),
+47951,Quant Business Cycle Fund-Reg(G),
+47989,Quant BFSI Fund-Reg(G),
+48035,Quant Healthcare Fund-Reg(G),
+48040,DSP Multicap Fund-Reg(G),
+48061,Bajaj Finserv Flexi Cap,151898
+48063,Bajaj Finserv Large and Mid Cap,152406
+48083,Kotak Quant Fund-Reg(G),
+48089,Mirae Asset Multicap,151812
+48114,HDFC Transportation and Logistics Fund-Reg(G),
+48120,Quant Manufacturing Fund-Reg(G),
+48124,HSBC Consumption Fund-Reg(G),
+48135,NJ Flexi Cap Fund-Reg(G),
+48146,Baroda BNP Paribas Small Cap,152130
+48147,Edelweiss Multi Cap Fund-Reg(G),
+48169,Nippon India Innovation Fund-Reg(G),
+48179,Mahindra Manulife Business Cycle Fund-Reg(G),
+48189,HDFC Technology Fund-Reg(G),
+48195,Quant Teck Fund-Reg(G),
+48199,WOC Multi Cap Fund-Reg(G),
+48220,HDFC Pharma and Healthcare Fund-Reg(G),
+48238,UTI Innovation Fund-Reg(G),
+48248,Quantum Small Cap Fund-Reg(G),
+48253,Axis India Manufacturing Fund-Reg(G),
+48291,Aditya Birla SL Transportation and Logistics Fund-Reg(G),
+48299,Helios Flexi Cap,152136
+48332,WOC Banking & Financial Services Fund-Reg(G),
+48333,WOC Large & Mid Cap Fund-Reg(G),
+48334,Quant Momentum Fund-Reg(G),
+48341,Quant PSU Fund-Reg(G),
+48342,Quant Consumption Fund-Reg(G),
+48343,Quant Commodities Fund-Reg(G),
+48350,DSP Banking & Financial Services Fund-Reg(G),
+48373,Union Childrens Fund-Reg(G),
+48388,Motilal Oswal Small Cap Fund-Reg(G),
+48427,DSP Nifty Healthcare ETF,
+48451,TRUSTMF Flexi Cap Fund-Reg(G),
+48452,JM Small Cap Fund-Reg(G),
+48456,Groww Banking & Financial Services Fund-Reg(G),
+48463,Baroda BNP Paribas Innovation Fund-Reg(G),
+48472,WOC Pharma and Healthcare Fund-Reg(G),
+48474,SBI Energy Opportunities Fund-Reg(G),
+48475,SBI Automotive Opportunities Fund-Reg(G),
+48488,Motilal Oswal Large Cap Fund-Reg(G),
+48489,Motilal Oswal Multi Cap Fund-Reg(G),
+48491,Aditya Birla SL Quant Fund-Reg(G),
+48499,Edelweiss Business Cycle Fund-Reg(G),
+48527,Old Bridge Focused Fund-Reg(G),
+48543,PGIM India Large and Mid Cap Fund(G),
+48587,Kotak Technology Fund-Reg(G),
+48599,Union Business Cycle,152411
+48606,Canara Robeco Manufacturing,152447
+48655,HDFC Manufacturing Fund-Reg(G),
+48656,Bandhan Innovation Fund-Reg(G),
+48683,Tata Nifty Auto Index Fund-Reg(G),
+48744,Samco Special Opportunities Fund-Reg(G),
+48806,Motilal Oswal Quant Fund-Reg(G),
+48809,Kotak Special Opportunities,152703
+48833,WOC Special Opp Fund-Reg(G),
+48881,Mahindra Manulife Manufacturing Fund-Reg(G),
+48896,ICICI Pru Energy Opportunities Fund-Reg(G),
+48897,Helios Financial Services Fund-Reg(G),
+48899,SBI Innovative Opportunities Fund-Reg(G),
+48901,Franklin India Multi Cap Fund-Reg(G),
+48902,SBI Quant Fund-Reg(G),
+48904,Baroda BNP Paribas Manufacturing Fund-Reg(G),
+48943,Kotak Transportation & Logistics Fund-Reg(G),
+48947,ICICI Pru Equity Minimum Variance Fund-Reg(G),
+48949,Nippon India Nifty Auto Index Fund-Reg(G),
+48956,ITI Large & Mid Cap Fund-Reg(G),
+48957,DSP Business Cycle Fund-Reg(G),
+48959,Motilal Oswal Business Cycle Fund-Reg(G),
+48960,Motilal Oswal Digital India Fund-Reg(G),
+48962,Motilal Oswal Manufacturing Fund-Reg(G),
+48964,Bank of India Business Cycle Fund-Reg(G),
+48965,Bajaj Finserv Large Cap,152780
+48968,PGIM India Multi Cap Fund-Reg(G),
+48975,PGIM India Healthcare Fund-Reg(G),
+48991,TRUSTMF Small Cap Fund-Reg(G),
+49014,Bandhan Business Cycle Fund-Reg(G),
+49020,Union Active Momentum Fund-Reg(G),
+49046,Kotak MNC Fund-Reg(G),
+49047,Invesco India Technology Fund-Reg(G),
+49051,Axis Consumption Fund-Reg(G),
+49067,Baroda BNP Paribas Dividend Yield Fund-Reg(G),
+49091,HSBC India Export Opportunities Fund-Reg(G),
+49110,Baroda BNP Paribas Childrens Fund-Reg(G),
+49111,Helios Mid Cap Fund-Reg(G),
+49112,Shriram Multi Sector Rotation Fund-Reg(G),
+49115,Nippon India Active Momentum Fund-Reg(G),
+49117,WOC ESG Best-In-Class Strategy Fund-Reg(G),
+49120,LIC MF Manufacturing Fund-Reg(G),
+49129,WOC Digital Bharat Fund-Reg(G),
+49152,Samco Multi Cap Fund-Reg(G),
+49179,Quantum Ethical Fund-Reg(G),
+49185,Kotak Energy Opportunities Fund-Reg(G),
+49192,WOC Quality Equity Fund-Reg(G),
+49209,Aditya Birla SL Conglomerate Fund-Reg(G),
+49235,Tata India Innovation Fund-Reg(G),
+49245,Helios Large & Mid Cap Fund-Reg(G),
+49313,Motilal Oswal Innovation Opportunities Fund-Reg(G),
+49315,Invesco India Business Cycle Fund-Reg(G),
+49317,Kotak Nifty Commodities Index Fund-Reg(G),
+49323,Bank of India Consumption Fund-Reg(G),
+49324,ITI Bharat Consumption Fund-Reg(G),
+49329,Edelweiss Consumption Fund-Reg(G),
+49345,Bajaj Finserv Consumption Fund-Reg(G),
+49355,Aditya Birla SL BSE India Infrastructure Index Fund-Reg(G),
+49376,Axis Momentum Fund-Reg(G),
+49400,Groww Multicap Fund-Reg(G),
+49421,Bajaj Finserv Healthcare Fund-Reg(G),
+49453,Mirae Asset Small Cap Fund-Reg(G),
+49457,Bajaj Finserv ELSS Tax Saver Fund-Reg(G),
+49459,Bajaj Finserv Multi Cap,153307
+49460,Mahindra Manulife Value Fund-Reg(G),
+49503,Nippon India MNC Fund-Reg(G),
+49506,Samco Large Cap Fund-Reg(G),
+49513,WOC Equity Savings Fund-Reg(G),
+49517,Motilal Oswal Active Momentum Fund-Reg(G),
+49521,ICICI Pru Rural Opportunities Fund-Reg(G),
+49528,UTI Quant Fund-Reg(G),
+49558,Baroda BNP Paribas Energy Opportunities Fund-Reg(G),
+49575,HSBC Financial Services Fund-Reg(G),
+49584,UTI Nifty India Manufacturing Index Fund-Reg(G),
+49691,HDFC Innovation Fund-Reg(G),
+49705,ICICI Pru Active Momentum Fund-Reg(G),
+49778,Edelweiss BSE Internet Economy Index Fund-Reg(G),
+49779,Samco Large & Mid Cap Fund-Reg(G),
+49801,Axis Services Opportunities Fund-Reg(G),
+49807,Unifi Flexi Cap Fund-Reg(G),
+49810,Motilal Oswal Special Opportunities Fund-Reg(G),
+49811,Motilal Oswal Infrastructure Fund-Reg(G),
+49873,Sundaram Multi-Factor Fund-Reg(G),
+49884,UTI Multi Cap,153516
+49893,ICICI Pru Quality Fund-Reg(G),
+49905,DSP Nifty Healthcare Index Fund-Reg(G),
+49928,ICICI Pru Conglomerate Fund-Reg(G),
+49929,Motilal Oswal Services Fund-Reg(G),
+49933,Bajaj Finserv Small Cap,153609
+49975,JM Large & Mid Cap Fund-Reg(G),
+49976,TRUSTMF Multi Cap Fund-Reg(G),
+49983,Mahindra Manulife Banking & Financial Services Fund-Reg(G),
+49985,Baroda BNP Paribas Health and Wellness Fund-Reg(G),
+50003,Bajaj Finserv Equity Savings Fund-Reg(G),
+50004,Bank of India Mid Cap Fund-Reg(G),
+50021,Bandhan Multi-Factor Fund-Reg(G),
+50041,Quant Equity Savings Fund-Reg(G),
+50096,Capitalmind Flexi Cap Fund-Reg(G),
+50097,Samco Small Cap Fund-Reg(G),
+50099,Kotak Active Momentum Fund-Reg(G),
+50188,Kotak Dividend Yield Fund-Reg(G),
+50211,Helios Small Cap Fund-Reg(G),
+50217,Bandhan Healthcare Fund-Reg(G),
+50227,Invesco India Consumption Fund-Reg(G),
+50243,Baroda BNP Paribas Business Conglomerates Fund-Reg(G),
+50268,Mahindra Manulife Innovation Opportunities Fund-Reg(G),
+50269,Franklin India Multi-Factor Fund(G),
+50284,The Wealth Company Flexi Cap Fund-Reg(G),
+50308,The Wealth Company Ethical Fund-Reg(G),
+50356,Motilal Oswal Consumption Fund-Reg(G),
+50372,Bajaj Finserv Banking And Financial Services,153935
+50374,Kotak Services Fund-Reg(G),
+50392,Groww Small Cap Fund-Reg(G),
+50393,LIC MF Consumption Fund-Reg(G),
+50400,Mirae Asset Infrastructure Fund-Reg(G),
+50404,Kotak Rural Opportunities Fund-Reg(G),
+50460,Union Consumption Fund-Reg(G),
+50461,SBI Quality Fund-Reg(G),
+50488,Parag Parikh Large Cap Fund-Reg(G),
+50494,Bank of India Banking & Financial Services Fund-Reg(G),
+50499,Old Bridge Flexi Cap Fund-Reg(G),
+50500,Edelweiss Financial Services Fund-Reg(G),
+50546,Abakkus Flexi Cap Fund-Reg(G),
+50593,The Wealth Company Small Cap Fund-Reg(G),
+50597,TRUSTMF Mid Cap Fund-Reg(G),
+50600,Motilal Oswal Financial Services Fund-Reg(G),
+50616,ITI Business Cycle Fund-Reg(G),
+50623,WOC Consumption Opportunities Fund-Reg(G),
+50634,Samco Mid Cap Fund-Reg(G),
+50666,Abakkus Small Cap Fund-Reg(G),
+50688,Canara Robeco Banking And Financial Services,154248
+50695,LIC MF Technology Fund-Reg(G),

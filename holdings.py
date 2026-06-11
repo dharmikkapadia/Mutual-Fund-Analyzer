@@ -1,15 +1,18 @@
 """
 holdings.py — portfolio holdings, fund facts and overlap analytics.
 
-Primary source is Rupeevest's internal JSON API (the same endpoints the
-website itself calls):
-  * GET /home/get_search_data                      -> name -> schemecode map
-  * GET /home/get_mf_portfolio_tracker?schemecode= -> stock_data (rows with
-    fincode/invdate/percent_aum), stock_mapping {fincode: stock name} and
-    fund_info [{s_name, aumdate, aumtotal}]
-Schemes are matched from AMFI names by token similarity with hard gates on
-Direct/Regular plan and Growth vs IDCW, so a flexi-cap fund can never match
-an ETF. Groww and Kuvera remain as fallbacks with the same strict matching.
+The Rupeevest integration is ported from a proven in-house script
+(scripts/update_holdings.py from the AFP overlap tool):
+  * GET /home/get_holding_asset?schemecode={code} -> equity holdings in
+    `hold_eq` rows: compname (stock), sect_name / rv_sect_name (sector),
+    holdpercentage (weight % of corpus), plus a report/as-on date.
+  * Scheme codes come from a bundled mapping (rupeevest_codes.csv, also
+    from that tool's FUND_MASTER) matched by AMFI code where known, else
+    by plan-agnostic name matching — portfolios are identical across
+    Direct/Regular and Growth/IDCW variants of a scheme, so plan tokens
+    are ignored. Schemes missing from the bundle fall back to Rupeevest's
+    live /home/get_search_data list.
+Groww and Kuvera remain as automatic fallbacks.
 
 Provider responses change shape without notice, so parsing is defensive:
 field lookups try candidate keys and structures are discovered by walking
@@ -23,27 +26,32 @@ the standard "portfolio overlap" definition.
 
 from __future__ import annotations
 
+import csv
 import re
 import time
+from datetime import datetime
+from pathlib import Path
 from urllib.parse import quote_plus
 
 import pandas as pd
 import requests
 
+# headers mirrored from the proven in-house script
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                   "Chrome/126.0 Safari/537.36"),
-    "Accept": "application/json, text/plain, */*",
-    "X-Requested-With": "XMLHttpRequest",
+                   "Chrome/124.0.0.0 Safari/537.36"),
     "Referer": "https://www.rupeevest.com/",
+    "Accept": "application/json, text/plain, */*",
 }
 TIMEOUT = 25
+REQUEST_DELAY = 1.0          # polite delay between Rupeevest calls
 
 RV_HOME = "https://www.rupeevest.com/"
 RV_SEARCH = "https://www.rupeevest.com/home/get_search_data"
-RV_PORTFOLIO = ("https://www.rupeevest.com/home/get_mf_portfolio_tracker"
-                "?schemecode={code}")
+RV_HOLDINGS = ("https://www.rupeevest.com/home/get_holding_asset"
+               "?schemecode={code}")
+RV_CODES_FILE = Path(__file__).parent / "rupeevest_codes.csv"
 GROWW_SEARCH = "https://groww.in/v1/api/search/v3/query/global/st_query"
 GROWW_SCHEME = (
     "https://groww.in/v1/api/data/mf/web/v4/scheme/{sid}",
@@ -216,16 +224,64 @@ def _parse_facts(d: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Provider: Rupeevest (primary)
+# Provider: Rupeevest (primary) — ported from the in-house overlap tool
 # --------------------------------------------------------------------------- #
+# plan/option tokens are irrelevant for holdings: Direct/Regular and
+# Growth/IDCW variants of a scheme hold the same portfolio
+_PLAN_TOKENS = {"direct", "regular", "growth", "idcw", "payout",
+                "reinvestment", "bonus"}
+
+
+def _core_tokens(name: str) -> set[str]:
+    return _tokens(name) - _PLAN_TOKENS
+
+
+def _best_core_match(target: set[str], candidates) -> tuple:
+    """(code, score) of the best plan-agnostic name match.
+
+    `candidates` yields (name, code). Exact core-token equality wins
+    immediately; otherwise highest Jaccard similarity.
+    """
+    best, best_score = None, 0.0
+    for nm, code in candidates:
+        c = _core_tokens(nm)
+        if not c:
+            continue
+        if c == target:
+            return code, 1.0
+        sc = len(target & c) / max(1, len(target | c))
+        if sc > best_score:
+            best, best_score = code, sc
+    return best, best_score
+
+
+_BUNDLE_CACHE: list | None = None
+
+
+def _bundled_codes() -> list[dict]:
+    """The curated mapping shipped with the repo (rupeevest_codes.csv)."""
+    global _BUNDLE_CACHE
+    if _BUNDLE_CACHE is None:
+        out = []
+        if RV_CODES_FILE.exists():
+            with open(RV_CODES_FILE, newline="", encoding="utf-8") as f:
+                for r in csv.DictReader(f):
+                    if r.get("rupeevest_code") and r.get("fund_name"):
+                        out.append({"code": r["rupeevest_code"].strip(),
+                                    "name": r["fund_name"].strip(),
+                                    "amfi": (r.get("amfi_code") or "").strip()})
+        _BUNDLE_CACHE = out
+    return _BUNDLE_CACHE
+
+
 _RV_CACHE: dict = {"t": 0.0, "data": None}
 
 
-def _rv_search_data() -> list[dict]:
+def _rv_search_data() -> list:
     if _RV_CACHE["data"] is None or time.time() - _RV_CACHE["t"] > 6 * 3600:
         js = _get_json(RV_SEARCH)
-        recs = js.get("search_data") if isinstance(js, dict) else None
-        if not recs:
+        recs = js.get("search_data") if isinstance(js, dict) else js
+        if not isinstance(recs, list) or not recs:
             recs = _dicts_with_key(js, "schemecode")
         if not recs:
             raise HoldingsError("unexpected get_search_data payload")
@@ -233,66 +289,79 @@ def _rv_search_data() -> list[dict]:
     return _RV_CACHE["data"]
 
 
-def _rupeevest(isin: str, name: str) -> dict:
-    target = _tokens(name)
-    best, best_score = None, 0.0
+def _rv_resolve_code(name: str, amfi_code=None) -> str:
+    """AMFI scheme -> Rupeevest schemecode: bundled AMFI id, bundled name,
+    then Rupeevest's live search list."""
+    bundle = _bundled_codes()
+    if amfi_code:
+        for b in bundle:
+            if b["amfi"] and b["amfi"] == str(amfi_code):
+                return b["code"]
+    target = _core_tokens(name)
+    code, score = _best_core_match(
+        target, ((b["name"], b["code"]) for b in bundle))
+    if code is not None and score >= 0.6:
+        return code
+    cands = []
     for rec in _rv_search_data():
-        for key in ("s_name1", "s_name"):
-            sc = _name_score(target, rec.get(key) or "")
-            if sc > best_score:
-                best, best_score = rec, sc
-    if best is None or best_score < _MIN_SCORE:
-        raise HoldingsError(f"no confident name match for '{name}' "
-                            f"(best score {best_score:.2f})")
-    code = best.get("schemecode")
-    js = _get_json(RV_PORTFOLIO.format(code=code))
-    if not isinstance(js, dict):
-        raise HoldingsError("unexpected portfolio_tracker payload")
-
-    # fincode -> stock name / sector maps
-    stock_map, sect_map = {}, {}
-    for holder in _dicts_with_key(js, "stock_mapping"):
-        if isinstance(holder.get("stock_mapping"), dict):
-            stock_map = {str(k): str(v)
-                         for k, v in holder["stock_mapping"].items()}
-            break
-    for k, v in js.items():
-        if "sect" in str(k).lower() and isinstance(v, dict):
-            sect_map = {str(kk): str(vv) for kk, vv in v.items()}
-            break
-
-    # the tracker returns positions across months — keep the latest month
-    raw = js.get("stock_data") or []
-    flat = []
-    for it in raw:
-        if isinstance(it, list):
-            flat.extend(x for x in it if isinstance(x, dict))
-        elif isinstance(it, dict):
-            flat.append(it)
-    dates = pd.to_datetime([str(it.get("invdate", "")) for it in flat],
-                           errors="coerce")
-    if len(flat) and pd.notna(dates.max()):
-        flat = [it for it, d in zip(flat, dates) if d == dates.max()]
-    seen, rows = set(), []
-    for it in flat:
-        fin = str(it.get("fincode", ""))
-        if fin and fin in seen:
+        if isinstance(rec, dict):
+            nm = _first(rec, ("s_name1", "s_name", "fund_name", "name"))
+            cd = _first(rec, ("schemecode", "scheme_code", "code"))
+        elif isinstance(rec, (list, tuple)) and len(rec) >= 3:
+            nm, cd = rec[0], rec[2]
+        else:
             continue
-        seen.add(fin)
-        nm = stock_map.get(fin) or _first(it, _NAME_KEYS)
-        w = _to_float(_first(it, _WEIGHT_KEYS))
-        sec = sect_map.get(fin) or _first(it, _SECTOR_KEYS)
+        if nm and cd is not None:
+            cands.append((str(nm), str(cd)))
+    code2, score2 = _best_core_match(target, cands)
+    if code2 is not None and score2 >= 0.6:
+        return code2
+    raise HoldingsError(
+        f"couldn't map '{name}' to a Rupeevest schemecode "
+        f"(best bundled {score:.2f}, live {score2:.2f})")
+
+
+def _rv_report_date(api_data: dict) -> str | None:
+    """As-on date extraction, as in the in-house script."""
+    for key in ("report_date", "as_on_date", "asondate", "date",
+                "as_on", "as_on_dt"):
+        raw = api_data.get(key)
+        if raw:
+            raw = str(raw).strip()
+            for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y",
+                        "%d %b %Y", "%d-%b-%Y"):
+                try:
+                    return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+                except ValueError:
+                    pass
+            return raw
+    return None
+
+
+def _rupeevest(isin: str, name: str, amfi_code=None) -> dict:
+    code = _rv_resolve_code(name, amfi_code)
+    time.sleep(REQUEST_DELAY)
+    api = _get_json(RV_HOLDINGS.format(code=code))
+    if not isinstance(api, dict):
+        raise HoldingsError("unexpected get_holding_asset payload")
+
+    rows = []
+    for h in api.get("hold_eq") or []:
+        if not isinstance(h, dict):
+            continue
+        nm = str(h.get("compname") or "").strip()
+        w = _to_float(h.get("holdpercentage"))
+        sector = (str(h.get("sect_name") or "").strip()
+                  or str(h.get("rv_sect_name") or "").strip() or None)
         if nm and w is not None and 0 < w <= 100:
-            rows.append({"security": str(nm).strip(), "weight": w,
-                         "sector": str(sec).strip() if sec else None})
+            rows.append({"security": nm, "weight": w, "sector": sector})
     holdings = _rows_to_df(rows)
 
-    fi = js.get("fund_info") or []
-    facts = _parse_facts(fi[0] if isinstance(fi, list) and fi else {})
-    if holdings.empty and not facts.get("aum"):
-        raise HoldingsError(f"schemecode {code} returned no holdings")
-    return {"holdings": holdings, "facts": facts,
-            "rv_schemecode": code}
+    facts = _parse_facts(api)
+    facts["as_of"] = _rv_report_date(api) or facts.get("as_of")
+    if holdings.empty:
+        raise HoldingsError(f"schemecode {code} returned no equity holdings")
+    return {"holdings": holdings, "facts": facts, "rv_schemecode": code}
 
 
 # --------------------------------------------------------------------------- #
@@ -393,7 +462,7 @@ def _kuvera(isin: str, name: str) -> dict:
 # --------------------------------------------------------------------------- #
 # Public API
 # --------------------------------------------------------------------------- #
-def fetch_portfolio(isin: str, name: str) -> dict:
+def fetch_portfolio(isin: str, name: str, amfi_code=None) -> dict:
     """Holdings + fund facts for a scheme, Rupeevest first.
 
     Returns {"holdings": DataFrame[security, weight%, sector], "facts": dict,
@@ -401,8 +470,8 @@ def fetch_portfolio(isin: str, name: str) -> dict:
     fails (the UI falls back to manual upload + external links).
     """
     errors = []
-    for fn, src in ((_rupeevest, "Rupeevest"), (_groww, "Groww"),
-                    (_kuvera, "Kuvera")):
+    for fn, src in ((lambda i, n: _rupeevest(i, n, amfi_code), "Rupeevest"),
+                    (_groww, "Groww"), (_kuvera, "Kuvera")):
         try:
             out = fn(isin, name)
             out["source"] = src
