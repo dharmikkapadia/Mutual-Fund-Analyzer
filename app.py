@@ -630,6 +630,39 @@ with tabs[3]:
         hist.update_layout(bargap=0.08)
         chart(hist)
 
+    # rolling beta/alpha vs the benchmark chosen on the Overview tab
+    try:
+        bench_roll, _ = get_history(bench_opts[bench_lbl])
+        rba = R.rolling_beta_alpha(series, bench_roll, rf, win)
+    except Exception:  # noqa: BLE001
+        rba = pd.DataFrame()
+    if not rba.empty:
+        section(f"{win}Y rolling alpha (%) vs "
+                f"{bench_lbl.split('  ·')[0]}")
+        afig = go.Figure(go.Scatter(
+            x=rba.index, y=rba["alpha"] * 100, name="Alpha",
+            line=dict(color=UP, width=1.2),
+            hovertemplate="%{y:.2f}%<extra></extra>"))
+        afig.add_hline(y=0, line_dash="dash", line_color=MUTED, line_width=1)
+        tv(afig, 260)
+        chart(afig)
+
+        section(f"{win}Y rolling beta")
+        bfig = go.Figure(go.Scatter(
+            x=rba.index, y=rba["beta"], name="Beta",
+            line=dict(color="#FF9800", width=1.2),
+            hovertemplate="%{y:.2f}<extra></extra>"))
+        bfig.add_hline(y=1, line_dash="dash", line_color=MUTED, line_width=1)
+        tv(bfig, 260)
+        chart(bfig)
+        st.caption("Alpha above 0 = beating the benchmark after adjusting "
+                   "for beta and the risk-free rate; beta above 1 = "
+                   "amplifying benchmark moves. Benchmark and risk-free "
+                   "rate are set on the Overview tab.")
+    else:
+        st.caption(f"Rolling beta/alpha needs more than {win}Y of history "
+                   "overlapping the benchmark (set on the Overview tab).")
+
 # ---- SIP ---- #
 with tabs[4]:
     section("SIP return (XIRR)")
@@ -785,6 +818,37 @@ with tabs[6]:
                        + " · ".join(f"{n}: {u}" for n, u in uniq.items())
                        + ". Weights are % of corpus; highlighted rows are "
                          "held by 2+ schemes.")
+
+        sect_map = {n: d for n, d in hmap.items()
+                    if "sector" in d.columns and d["sector"].notna().any()}
+        if sect_map:
+            section("Sector allocation (%)")
+            srows = []
+            for n, d in sect_map.items():
+                g = d.dropna(subset=["sector"]).groupby("sector")["weight"] \
+                     .sum()
+                srows += [{"scheme": n, "sector": sec, "weight": w}
+                          for sec, w in g.items()]
+            sdf = pd.DataFrame(srows)
+            order = (sdf.groupby("sector")["weight"].max()
+                        .sort_values().index.tolist())
+            sfig = go.Figure()
+            for i, n in enumerate(sect_map):
+                sub = (sdf[sdf["scheme"] == n].set_index("sector")["weight"]
+                       .reindex(order))
+                sfig.add_trace(go.Bar(
+                    y=order, x=sub.values, name=n, orientation="h",
+                    marker_color=SERIES[i % len(SERIES)],
+                    marker_line_width=0,
+                    hovertemplate="%{x:.2f}%<extra>" + n + "</extra>"))
+            tv(sfig, max(280, 34 * len(order)), legend=True,
+               unified=False, spikes=False)
+            sfig.update_layout(barmode="group", bargap=0.25)
+            sfig.update_yaxes(side="left")
+            chart(sfig)
+        elif hmap:
+            st.caption("No sector data in the fetched holdings — sector "
+                       "comparison appears when the provider supplies it.")
     elif have:
         st.info("No holdings data parsed yet — fetch again later or use the "
                 "manual upload.")

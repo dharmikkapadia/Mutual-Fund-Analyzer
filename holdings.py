@@ -88,6 +88,8 @@ _NAME_KEYS = ("company_name", "stock_name", "security_name", "name",
 _WEIGHT_KEYS = ("corpus_per", "percentage", "weight", "weighting",
                 "corpus_percentage", "portfolio_percentage", "percent",
                 "net_assets", "holding_percentage")
+_SECTOR_KEYS = ("sector_name", "sector", "industry_name", "industry",
+                "macro_sector", "sectorName")
 
 
 def _parse_holdings_list(items: list) -> pd.DataFrame:
@@ -97,11 +99,14 @@ def _parse_holdings_list(items: list) -> pd.DataFrame:
             continue
         name = _first(it, _NAME_KEYS)
         weight = _to_float(_first(it, _WEIGHT_KEYS))
+        sector = _first(it, _SECTOR_KEYS)
         if name and weight is not None and 0 < weight <= 100:
-            rows.append({"security": str(name).strip(), "weight": weight})
+            rows.append({"security": str(name).strip(), "weight": weight,
+                         "sector": str(sector).strip() if sector else None})
     df = pd.DataFrame(rows)
     if not df.empty:
-        df = (df.groupby("security", as_index=False)["weight"].sum()
+        df = (df.groupby("security", as_index=False)
+                .agg(weight=("weight", "sum"), sector=("sector", "first"))
                 .sort_values("weight", ascending=False)
                 .reset_index(drop=True))
     return df
@@ -239,11 +244,17 @@ def parse_uploaded(df: pd.DataFrame) -> pd.DataFrame:
         raise HoldingsError(
             "couldn't find a security-name and weight column — expected "
             "headers like 'Security' and 'Weight %'")
+    sec_col = next((cols[k] for k in cols
+                    if any(t in k for t in ("sector", "industry"))), None)
     out = pd.DataFrame({
         "security": df[name_col].astype(str).str.strip(),
-        "weight": df[w_col].map(_to_float)}).dropna()
+        "weight": df[w_col].map(_to_float),
+        "sector": (df[sec_col].astype(str).str.strip()
+                   if sec_col is not None else None)})
+    out = out.dropna(subset=["security", "weight"])
     out = out[(out["weight"] > 0) & (out["weight"] <= 100)]
-    return (out.groupby("security", as_index=False)["weight"].sum()
+    return (out.groupby("security", as_index=False)
+               .agg(weight=("weight", "sum"), sector=("sector", "first"))
                .sort_values("weight", ascending=False).reset_index(drop=True))
 
 

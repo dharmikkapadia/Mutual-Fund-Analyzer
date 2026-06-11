@@ -289,6 +289,35 @@ def benchmark_stats(series: pd.Series, bench: pd.Series, rf: float = 0.065,
     }
 
 
+def rolling_beta_alpha(series: pd.Series, bench: pd.Series, rf: float = 0.065,
+                       window_years: float = 1) -> pd.DataFrame:
+    """Rolling beta and Jensen's alpha vs a benchmark.
+
+    Computed on aligned daily returns over a `window_years`-long trading-day
+    window: beta = rolling cov/var; alpha (annual, decimal) uses the
+    window's annualised fund/benchmark returns. Empty when the common
+    history is shorter than the window.
+    """
+    s, b = _clean(series), _clean(bench)
+    if s.empty or b.empty:
+        return pd.DataFrame()
+    df = pd.concat([s.pct_change(), b.pct_change()], axis=1,
+                   join="inner").dropna()
+    df.columns = ["f", "m"]
+    win = int(window_years * TRADING_DAYS)
+    if len(df) < win + 10:
+        return pd.DataFrame()
+    var_m = df["m"].rolling(win).var()
+    beta = df["f"].rolling(win).cov(df["m"]) / var_m
+    yrs = win / TRADING_DAYS
+    f_ann = (1.0 + np.expm1(np.log1p(df["f"]).rolling(win).sum())) \
+        ** (1.0 / yrs) - 1.0
+    m_ann = (1.0 + np.expm1(np.log1p(df["m"]).rolling(win).sum())) \
+        ** (1.0 / yrs) - 1.0
+    alpha = f_ann - (rf + beta * (m_ann - rf))
+    return pd.DataFrame({"beta": beta, "alpha": alpha}).dropna()
+
+
 def snapshot(series: pd.Series, spark_points: int = 60) -> dict:
     """One-row summary for dashboards / peer tables: latest NAV, 1D change,
     1Y absolute, 3Y/5Y CAGR (% values), max drawdown %, and a downsampled
