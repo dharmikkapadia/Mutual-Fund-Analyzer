@@ -5,13 +5,18 @@ Streamlit core (the analytics + UI) with a customtkinter launcher so it opens
 like a desktop app inside the AFP suite.
 
 ## UI
-Minimal pitch-black theme inspired by TradingView (true-black `#000000`
-background, high-contrast text, crosshair hover, right-side axes,
-1M/6M/YTD/1Y/3Y/5Y/All range buttons, red/green gain-loss semantics).
-Charts are fully interactive: pan by drag, zoom with the scroll wheel, and a
-minimal modebar (zoom/pan/reset/fullscreen/PNG export). The Streamlit theme
-lives in `.streamlit/config.toml`; chart styling is centralised in the
-`tv()` helper in `app.py` so every chart shares one template.
+Minimal TradingView-inspired design with four **viewing modes** — Midnight
+(true black, default), Slate, Light and Sepia — switchable from the
+sidebar's Appearance section and remembered per browser (localStorage).
+Each mode retokens the whole app: custom CSS, native Streamlit widgets
+(via runtime theme config) and every chart. High-contrast text, crosshair
+hover, right-side axes, 1M/6M/YTD/1Y/3Y/5Y/All range buttons, red/green
+gain-loss semantics. Charts are fully interactive: pan by drag, zoom with
+the scroll wheel, and a minimal modebar (zoom/pan/reset/fullscreen/PNG).
+Subtle motion (fade-up tab transitions, hover lifts on cards/buttons)
+respects `prefers-reduced-motion`. Chart styling is centralised in the
+`tv()` helper in `app.py`; `.streamlit/config.toml` holds the default
+(Midnight) widget theme.
 
 ## Data sources
 | Source | Role |

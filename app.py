@@ -26,12 +26,25 @@ import returns as R
 import store
 
 # --------------------------------------------------------------------------- #
-# Design tokens — pitch-black, high-contrast (TradingView-inspired)
+# Viewing modes — each defines the full token set; native Streamlit widget
+# colours are switched at runtime via st._config (note: that part is
+# process-wide, so on a shared deployment the last pick wins for new loads)
 # --------------------------------------------------------------------------- #
-BG, PANEL, GRID = "#000000", "#101014", "#34343C"
-TEXT, MUTED = "#F2F2F5", "#9D9DA8"
-ACCENT, UP, DOWN = "#2962FF", "#0ECB81", "#F6465D"
-SERIES = [ACCENT, "#FF9800", UP, "#E040FB", "#26C6DA", DOWN]
+THEMES = {
+    "Midnight": dict(bg="#000000", panel="#101014", grid="#34343C",
+                     text="#F2F2F5", muted="#9D9DA8", accent="#2962FF",
+                     up="#0ECB81", down="#F6465D", base="dark"),
+    "Slate": dict(bg="#131722", panel="#1E222D", grid="#2A2E39",
+                  text="#D1D4DC", muted="#787B86", accent="#2962FF",
+                  up="#089981", down="#F23645", base="dark"),
+    "Light": dict(bg="#FFFFFF", panel="#F4F6FA", grid="#DCE1E8",
+                  text="#0E1116", muted="#5A6472", accent="#2962FF",
+                  up="#0E9F6E", down="#E5484D", base="light"),
+    "Sepia": dict(bg="#F4ECD8", panel="#EADFC4", grid="#CFBE9C",
+                  text="#332A1B", muted="#6E5F45", accent="#205EA6",
+                  up="#1E7B45", down="#B3402E", base="light"),
+}
+DEFAULT_THEME = "Midnight"
 FONT = "-apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif"
 PLOTLY_CONFIG = {
     "displayModeBar": True, "displaylogo": False, "scrollZoom": True,
@@ -39,8 +52,94 @@ PLOTLY_CONFIG = {
                                "zoomIn2d", "zoomOut2d"],
 }
 
+
+def rgba(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    return (f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},"
+            f"{int(h[4:6], 16)},{alpha})")
+
+
+def _apply_native_theme(t: dict) -> bool:
+    """Point Streamlit's own widget theme at the active palette."""
+    opts = {"theme.base": t["base"], "theme.backgroundColor": t["bg"],
+            "theme.secondaryBackgroundColor": t["panel"],
+            "theme.textColor": t["text"], "theme.primaryColor": t["accent"]}
+    changed = False
+    for k, v in opts.items():
+        if st._config.get_option(k) != v:
+            st._config.set_option(k, v)
+            changed = True
+    return changed
+
+
+def _on_theme_change():
+    st.session_state.theme = st.session_state.theme_pick
+    _apply_native_theme(THEMES[st.session_state.theme])
+
+
 st.set_page_config(page_title="AFP NAV Explorer", page_icon="📈",
                    layout="wide", initial_sidebar_state="expanded")
+
+# --------------------------------------------------------------------------- #
+# Session state — watchlists and theme live in the browser (localStorage) so
+# they survive restarts on cloud deployments and stay per-visitor. The JSON
+# file (store.py) is the desktop fallback and one-time migration source.
+# AFP_NO_BROWSER_STORE=1 disables the browser sync (used by headless tests).
+# --------------------------------------------------------------------------- #
+LS_KEY = "afp_watchlists_v1"
+LS_THEME = "afp_theme_v1"
+USE_BROWSER_STORE = os.getenv("AFP_NO_BROWSER_STORE", "") != "1"
+
+if "watchlists" not in st.session_state:
+    boot, boot_theme = None, None
+    if USE_BROWSER_STORE:
+        raw = streamlit_js_eval(
+            js_expressions=("JSON.stringify({"
+                            f"wl: localStorage.getItem('{LS_KEY}'), "
+                            f"th: localStorage.getItem('{LS_THEME}')}})"),
+            key="ls_read")
+        if raw is None:
+            # Component round-trip pending; the value arriving triggers a rerun.
+            st.caption("Loading saved settings…")
+            st.stop()
+        try:
+            obj = json.loads(raw) or {}
+            if obj.get("wl"):
+                boot = {str(k): [int(c) for c in v]
+                        for k, v in json.loads(obj["wl"]).items()}
+            boot_theme = obj.get("th")
+        except (ValueError, TypeError, AttributeError):
+            boot = None
+    st.session_state.watchlists = boot or store.load()
+    st.session_state.theme = (boot_theme if boot_theme in THEMES
+                              else DEFAULT_THEME)
+if "active_list" not in st.session_state:
+    st.session_state.active_list = next(iter(st.session_state.watchlists))
+if "theme" not in st.session_state:
+    st.session_state.theme = DEFAULT_THEME
+
+T = THEMES[st.session_state.theme]
+BG, PANEL, GRID = T["bg"], T["panel"], T["grid"]
+TEXT, MUTED = T["text"], T["muted"]
+ACCENT, UP, DOWN = T["accent"], T["up"], T["down"]
+SERIES = [ACCENT, "#FF9800", UP, "#E040FB", "#26C6DA", DOWN]
+SHADOW = ("0 6px 18px rgba(0,0,0,.35)" if T["base"] == "dark"
+          else "0 6px 18px rgba(0,0,0,.12)")
+if _apply_native_theme(T):
+    # frontend picks the new widget theme up on the next run
+    st.rerun()
+
+if USE_BROWSER_STORE:
+    # Write-through mirrors: re-run only when the payload changes.
+    _payload = json.dumps(st.session_state.watchlists, separators=(",", ":"))
+    streamlit_js_eval(
+        js_expressions=f"localStorage.setItem('{LS_KEY}', "
+                       f"{json.dumps(_payload)})",
+        key="ls_write")
+    streamlit_js_eval(
+        js_expressions=f"localStorage.setItem('{LS_THEME}', "
+                       f"{json.dumps(st.session_state.theme)})",
+        key="ls_write_theme")
 
 st.markdown(f"""
 <style>
@@ -88,6 +187,32 @@ st.markdown(f"""
   [data-testid="stSidebar"] {{border-right: 1px solid {GRID};}}
   [data-testid="stSidebar"] .block-container {{padding-top: 1.2rem;}}
   hr {{border-color: {GRID};}}
+
+  /* ---- motion ---- */
+  html {{scroll-behavior: smooth;}}
+  .stApp {{transition: background-color .4s ease, color .4s ease;}}
+  @media (prefers-reduced-motion: no-preference) {{
+    @keyframes afpFadeUp {{
+      from {{opacity: 0; transform: translateY(8px);}}
+      to   {{opacity: 1; transform: none;}}
+    }}
+    .block-container {{animation: afpFadeUp .35s ease both;}}
+    [role="tabpanel"] {{animation: afpFadeUp .35s ease both;}}
+    [data-testid="stMetric"] {{transition: transform .18s ease,
+      border-color .18s ease, box-shadow .18s ease;}}
+    [data-testid="stMetric"]:hover {{transform: translateY(-2px);
+      border-color: {ACCENT}; box-shadow: {SHADOW};}}
+    .stButton button, [data-testid="stFormSubmitButton"] button
+      {{transition: transform .15s ease, filter .15s ease,
+        box-shadow .15s ease;}}
+    .stButton button:hover {{transform: translateY(-1px);
+      filter: brightness(1.08); box-shadow: {SHADOW};}}
+    .stButton button:active {{transform: translateY(0) scale(.98);}}
+    .stTabs [data-baseweb="tab"] {{transition: color .2s ease;}}
+    [data-testid="stExpander"] {{transition: border-color .2s ease;}}
+    [data-testid="stExpander"]:hover {{border-color: {ACCENT};}}
+    a {{transition: color .15s ease;}}
+  }}
 </style>""", unsafe_allow_html=True)
 
 
@@ -195,43 +320,6 @@ def pct(x):
     return "—" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{x:.2f}%"
 
 
-# --------------------------------------------------------------------------- #
-# Session state — watchlists live in the browser (localStorage) so they
-# survive restarts on cloud deployments and stay per-visitor. The JSON file
-# (store.py) is the desktop fallback and one-time migration source.
-# AFP_NO_BROWSER_STORE=1 disables the browser sync (used by headless tests).
-# --------------------------------------------------------------------------- #
-LS_KEY = "afp_watchlists_v1"
-USE_BROWSER_STORE = os.getenv("AFP_NO_BROWSER_STORE", "") != "1"
-
-if "watchlists" not in st.session_state:
-    boot = None
-    if USE_BROWSER_STORE:
-        raw = streamlit_js_eval(
-            js_expressions=f"localStorage.getItem('{LS_KEY}') || '__empty__'",
-            key="ls_read")
-        if raw is None:
-            # Component round-trip pending; the value arriving triggers a rerun.
-            st.caption("Loading saved watchlists…")
-            st.stop()
-        if raw != "__empty__":
-            try:
-                boot = {str(k): [int(c) for c in v]
-                        for k, v in json.loads(raw).items()}
-            except (ValueError, TypeError, AttributeError):
-                boot = None
-    st.session_state.watchlists = boot or store.load()
-if "active_list" not in st.session_state:
-    st.session_state.active_list = next(iter(st.session_state.watchlists))
-
-if USE_BROWSER_STORE:
-    # Write-through mirror: re-runs only when the payload changes.
-    _payload = json.dumps(st.session_state.watchlists, separators=(",", ":"))
-    streamlit_js_eval(
-        js_expressions=f"localStorage.setItem('{LS_KEY}', "
-                       f"{json.dumps(_payload)})",
-        key="ls_write")
-
 try:
     universe = get_universe()
 except Exception as e:  # noqa: BLE001
@@ -292,6 +380,14 @@ with st.sidebar:
                 store.add(st.session_state.watchlists,
                           st.session_state.active_list, opts[label])
             st.rerun()
+
+    st.divider()
+    section("Appearance")
+    _theme_names = list(THEMES.keys())
+    st.selectbox("Viewing mode", _theme_names,
+                 index=_theme_names.index(st.session_state.theme),
+                 key="theme_pick", on_change=_on_theme_change,
+                 label_visibility="collapsed")
 
 
 # --------------------------------------------------------------------------- #
@@ -428,7 +524,7 @@ with tabs[1]:
         fig = go.Figure(go.Scatter(
             x=series.index, y=series.values, name="NAV",
             line=dict(color=ACCENT, width=1.5),
-            fill="tozeroy", fillcolor="rgba(41,98,255,0.07)",
+            fill="tozeroy", fillcolor=rgba(ACCENT, 0.07),
             hovertemplate="₹%{y:,.2f}<extra></extra>"))
         tv(fig, 380)
         range_buttons(fig)
@@ -441,7 +537,7 @@ with tabs[1]:
         ddfig = go.Figure(go.Scatter(
             x=dd.index, y=dd.values * 100, name="Drawdown",
             line=dict(color=DOWN, width=1),
-            fill="tozeroy", fillcolor="rgba(242,54,69,0.12)",
+            fill="tozeroy", fillcolor=rgba(DOWN, 0.12),
             hovertemplate="%{y:.2f}%<extra></extra>"))
         tv(ddfig, 200)
         chart(ddfig)
@@ -812,7 +908,7 @@ with tabs[6]:
             disp[c] = comb[c].map(
                 lambda v: "—" if pd.isna(v) else f"{v:.2f}")
         styler = disp.style.apply(
-            lambda r: ["background-color: rgba(14,203,129,0.12)"] * len(r)
+            lambda r: [f"background-color: {rgba(UP, 0.12)}"] * len(r)
             if comb.loc[r.name, "Held by"] >= 2 else [""] * len(r), axis=1)
         st.dataframe(styler, hide_index=True, width="stretch",
                      height=min(40 + 35 * len(disp), 640))
@@ -945,7 +1041,7 @@ with tabs[7]:
                 dfig.add_trace(go.Box(
                     y=vals, name=col, boxpoints=False, showlegend=False,
                     line=dict(color=MUTED, width=1),
-                    fillcolor="rgba(120,123,134,0.15)"))
+                    fillcolor=rgba(MUTED, 0.15)))
                 mine = pdf.loc[pdf["Code"] == code, col]
                 if not mine.empty and pd.notna(mine.iloc[0]):
                     dfig.add_trace(go.Scatter(
