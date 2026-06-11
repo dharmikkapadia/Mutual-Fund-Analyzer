@@ -20,19 +20,24 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_js_eval import streamlit_js_eval
 
+import holdings as H
 import nav_data as D
 import returns as R
 import store
 
 # --------------------------------------------------------------------------- #
-# Design tokens — TradingView-inspired dark palette
+# Design tokens — pitch-black, high-contrast (TradingView-inspired)
 # --------------------------------------------------------------------------- #
-BG, PANEL, GRID = "#131722", "#1E222D", "#2A2E39"
-TEXT, MUTED = "#D1D4DC", "#787B86"
-ACCENT, UP, DOWN = "#2962FF", "#089981", "#F23645"
+BG, PANEL, GRID = "#000000", "#101014", "#34343C"
+TEXT, MUTED = "#F2F2F5", "#9D9DA8"
+ACCENT, UP, DOWN = "#2962FF", "#0ECB81", "#F6465D"
 SERIES = [ACCENT, "#FF9800", UP, "#E040FB", "#26C6DA", DOWN]
 FONT = "-apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif"
-PLOTLY_CONFIG = {"displayModeBar": False}
+PLOTLY_CONFIG = {
+    "displayModeBar": True, "displaylogo": False, "scrollZoom": True,
+    "modeBarButtonsToRemove": ["select2d", "lasso2d", "autoScale2d",
+                               "zoomIn2d", "zoomOut2d"],
+}
 
 st.set_page_config(page_title="AFP NAV Explorer", page_icon="📈",
                    layout="wide", initial_sidebar_state="expanded")
@@ -40,8 +45,11 @@ st.set_page_config(page_title="AFP NAV Explorer", page_icon="📈",
 st.markdown(f"""
 <style>
   [data-testid="stHeader"] {{background: transparent;}}
-  [data-testid="stToolbar"], .stAppDeployButton, #MainMenu, footer
-    {{display: none;}}
+  /* Hide only the right-side toolbar actions — the toolbar itself hosts the
+     sidebar-reopen chevron, so it must stay visible. */
+  [data-testid="stToolbarActions"], [data-testid="stAppDeployButton"],
+  [data-testid="stMainMenu"], footer {{display: none;}}
+  [data-testid="stHeader"] button {{color: {MUTED};}}
   .block-container {{padding-top: 1.4rem; padding-bottom: 2rem;
     max-width: 1240px;}}
 
@@ -96,10 +104,12 @@ def tv(fig: go.Figure, height: int = 320, *, legend: bool = False,
         font=dict(family=FONT, size=12, color=MUTED),
         hovermode="x unified" if unified else "closest",
         hoverlabel=dict(bgcolor=PANEL, bordercolor=GRID,
-                        font=dict(family=FONT, size=12, color=TEXT)),
+                        font=dict(family=FONT, size=13, color=TEXT)),
         showlegend=legend,
         legend=dict(orientation="h", x=0, y=1.1, bgcolor="rgba(0,0,0,0)",
                     font=dict(color=TEXT, size=12)),
+        dragmode="pan",
+        modebar=dict(bgcolor="rgba(0,0,0,0)", color=MUTED, activecolor=TEXT),
     )
     fig.update_xaxes(gridcolor=GRID, zeroline=False, showline=False, ticks="",
                      showspikes=spikes, spikemode="across", spikesnap="cursor",
@@ -155,6 +165,23 @@ def get_universe() -> pd.DataFrame:
 def get_history(code: int):
     payload = D.fetch_scheme(int(code))
     return D.history_to_series(payload), D.scheme_meta(payload)
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def get_portfolio(isin: str, name: str) -> dict:
+    return H.fetch_portfolio(isin, name)
+
+
+def isin_of(univ: pd.DataFrame, code: int) -> str:
+    row = univ[univ["code"] == code]
+    isin = row["isin"].iloc[0] if not row.empty else ""
+    return isin if isinstance(isin, str) and len(isin) >= 8 else ""
+
+
+def links_md(name: str) -> str:
+    return (f"[Rupeevest]({H.rupeevest_link(name)}) · "
+            f"[Factsheet]({H.factsheet_link(name)}) · "
+            f"[ValueResearch]({H.valueresearch_link(name)})")
 
 
 def name_of(univ: pd.DataFrame, code: int) -> str:
@@ -315,7 +342,7 @@ m4.metric("5Y CAGR", pct(tr.loc["5Y", "Annualised %"]) if "5Y" in tr.index else 
 m5.metric("Max drawdown", pct(R.max_drawdown(series) * 100))
 
 tabs = st.tabs(["Dashboard", "Overview", "Returns", "Rolling", "SIP / XIRR",
-                "Compare", "Peers"])
+                "Compare", "Holdings", "Peers"])
 
 RET_COLS = ["1D %", "1Y %", "3Y % pa", "5Y % pa"]
 
@@ -424,12 +451,12 @@ with tabs[1]:
         rc1, rc2 = st.columns(2)
         rf = rc1.number_input("Risk-free %", value=6.5, step=0.25,
                               help="Annual risk-free rate for Sharpe/Sortino "
-                                   "(e.g. 91-day T-bill yield).") / 100
+                                   "and alpha (e.g. 91-day T-bill yield).") / 100
         win_lbl = rc2.selectbox("Window", ["3Y", "1Y", "5Y", "All"],
                                 help="Trailing window the ratios are "
                                      "computed over.")
-        rr = R.risk_ratios(series, rf, {"1Y": 1, "3Y": 3, "5Y": 5,
-                                        "All": None}[win_lbl])
+        win_yrs = {"1Y": 1, "3Y": 3, "5Y": 5, "All": None}[win_lbl]
+        rr = R.risk_ratios(series, rf, win_yrs)
         if rr:
             k1, k2 = st.columns(2)
             k1.metric("Sharpe", "—" if np.isnan(rr["sharpe"])
@@ -437,13 +464,47 @@ with tabs[1]:
             k2.metric("Sortino", "—" if np.isnan(rr["sortino"])
                       else f"{rr['sortino']:.2f}")
             k3, k4 = st.columns(2)
-            k3.metric("Volatility", pct(rr["vol"] * 100),
-                      help="Annualised stdev of daily returns over the window.")
+            k3.metric("Std dev (ann.)", pct(rr["vol"] * 100),
+                      help="Annualised standard deviation of daily returns "
+                           "over the window.")
             k4.metric("CAGR", pct(rr["cagr"] * 100))
             st.caption(f"Computed over {rr['years']:.1f}y of daily NAVs "
                        f"vs a {rf*100:.2f}% risk-free rate.")
         else:
             st.caption("Not enough history for risk ratios.")
+
+        # benchmark-relative: beta / alpha vs an index fund's NAV series
+        idx_univ = universe[universe["category"]
+                            .str.contains("index", case=False, na=False)]
+        if idx_univ.empty:
+            idx_univ = universe
+        bench_opts = {f"{r['name']}  ·  [{r['code']}]": r["code"]
+                      for _, r in idx_univ.iterrows()}
+        bench_keys = list(bench_opts.keys())
+        default_ix = next((i for i, k in enumerate(bench_keys)
+                           if "nifty 50" in k.lower()
+                           and "direct" in k.lower()), 0)
+        bench_lbl = st.selectbox("Benchmark (index fund)", bench_keys,
+                                 index=default_ix,
+                                 help="Beta/alpha use this fund's NAV as the "
+                                      "market proxy — pick the index fund "
+                                      "that matches the scheme's mandate.")
+        try:
+            bench_series, _ = get_history(bench_opts[bench_lbl])
+            bs = R.benchmark_stats(series, bench_series, rf, win_yrs)
+        except Exception:  # noqa: BLE001
+            bs = {}
+        if bs:
+            b1, b2, b3 = st.columns(3)
+            b1.metric("Beta", f"{bs['beta']:.2f}")
+            b2.metric("Alpha (ann.)", pct(bs["alpha"] * 100))
+            b3.metric("R²", f"{bs['r2']:.2f}")
+            st.caption(f"vs {bench_lbl.split('  ·')[0]} · "
+                       f"{bs['observations']:,} common days · benchmark CAGR "
+                       f"{bs['bench_cagr']*100:.2f}%")
+        else:
+            st.caption("Beta/alpha need ≥60 overlapping NAV days with the "
+                       "benchmark.")
 
     section("Calendar-year returns")
     cal = R.calendar_year_returns(series)
@@ -472,6 +533,31 @@ with tabs[1]:
         hm.update_xaxes(showgrid=False)
         hm.update_yaxes(showgrid=False)
         chart(hm)
+
+    section("Fund facts & links")
+    sch_name = name_of(universe, code)
+    facts, facts_src = {}, None
+    try:
+        port = get_portfolio(isin_of(universe, code), sch_name)
+        facts, facts_src = port.get("facts", {}), port.get("source")
+    except Exception:  # noqa: BLE001
+        pass
+    if facts and (facts.get("aum") or facts.get("managers")):
+        f1, f2, f3 = st.columns([1, 1, 2])
+        aum = facts.get("aum")
+        if aum and aum > 1e6:          # absolute rupees -> crores
+            aum = aum / 1e7
+        f1.metric("Fund size (AUM)", f"₹{aum:,.0f} Cr" if aum else "—")
+        f2.metric("Expense ratio",
+                  f"{facts['expense']:.2f}%" if facts.get("expense") else "—")
+        with f3:
+            st.markdown(f"**Fund manager(s)**<br>"
+                        f"{facts.get('managers') or '—'}",
+                        unsafe_allow_html=True)
+        st.caption(f"Source: {facts_src} · {links_md(sch_name)}")
+    else:
+        st.caption("Live fund facts (AUM, manager) are unavailable right "
+                   f"now — use the links: {links_md(sch_name)}")
 
 # ---- Returns (point-to-point) ---- #
 with tabs[2]:
@@ -597,8 +683,114 @@ with tabs[5]:
             section("Trailing-return comparison (annualised where >1Y, else absolute)")
             table(R.compare_trailing(named))
 
-# ---- Peers (category benchmarking) ---- #
+# ---- Holdings (portfolio overlap) ---- #
 with tabs[6]:
+    section("Portfolio holdings & overlap")
+    st.caption("Holdings and fund facts come from public Groww/Kuvera "
+               "endpoints (Rupeevest has no public API, so it's linked per "
+               "scheme instead). Portfolios update monthly with AMC "
+               "disclosures. If a fetch fails you can upload a holdings CSV "
+               "below.")
+    hl_labels = st.multiselect("Schemes (from this watchlist)",
+                               list(scheme_labels.keys()),
+                               default=[chosen_label], key="hold_pick")
+    if "holdings_data" not in st.session_state:
+        st.session_state.holdings_data = {}
+
+    if st.button("Fetch holdings", type="primary") and hl_labels:
+        errs = []
+        prog = st.progress(0.0, text="Fetching portfolios…")
+        for i, lbl in enumerate(hl_labels):
+            c = scheme_labels[lbl]
+            try:
+                st.session_state.holdings_data[lbl] = get_portfolio(
+                    isin_of(universe, c), name_of(universe, c))
+            except Exception as e:  # noqa: BLE001
+                errs.append(f"{lbl.split('  ·')[0]}: {e}")
+            prog.progress((i + 1) / len(hl_labels))
+        prog.empty()
+        for msg in errs:
+            st.warning(msg)
+
+    with st.expander("Manual upload (CSV with security + weight % columns)"):
+        up_lbl = st.selectbox("Scheme the file belongs to", hl_labels or
+                              list(scheme_labels.keys()), key="hold_up_lbl")
+        up = st.file_uploader("Holdings CSV", type="csv", key="hold_up_file")
+        if up is not None and up_lbl:
+            try:
+                hdf = H.parse_uploaded(pd.read_csv(up))
+                st.session_state.holdings_data[up_lbl] = {
+                    "holdings": hdf, "facts": {}, "source": "Manual upload"}
+                st.success(f"Loaded {len(hdf)} holdings for "
+                           f"{up_lbl.split('  ·')[0]}.")
+            except Exception as e:  # noqa: BLE001
+                st.error(f"Couldn't parse the file: {e}")
+
+    have = {lbl.split("  ·")[0]: st.session_state.holdings_data[lbl]
+            for lbl in hl_labels if lbl in st.session_state.holdings_data}
+    hmap = {n: d["holdings"] for n, d in have.items()
+            if d.get("holdings") is not None and not d["holdings"].empty}
+
+    if have:
+        for n, d in have.items():
+            f = d.get("facts") or {}
+            aum = f.get("aum")
+            if aum and aum > 1e6:
+                aum = aum / 1e7
+            bits = [f"**{n}**",
+                    f"{len(d['holdings'])} holdings"
+                    if d.get("holdings") is not None and
+                    not d["holdings"].empty else "no holdings",
+                    f"AUM ₹{aum:,.0f} Cr" if aum else None,
+                    f"manager: {f['managers']}" if f.get("managers") else None,
+                    f"({d.get('source', '?')})"]
+            st.markdown(" · ".join(b for b in bits if b) + "  \n"
+                        + links_md(n), unsafe_allow_html=True)
+
+    if len(hmap) >= 2:
+        section("Overlap % (sum of overlapping weights)")
+        mat = H.overlap_matrix(hmap)
+        short = [n[:30] + "…" if len(n) > 30 else n for n in mat.index]
+        ofig = go.Figure(go.Heatmap(
+            z=mat.values, x=short, y=short,
+            colorscale=[[0, PANEL], [1, ACCENT]], zmin=0, zmax=100,
+            texttemplate="%{z:.1f}%", textfont=dict(size=12),
+            showscale=False, xgap=2, ygap=2,
+            hovertemplate="%{y} ∩ %{x}: %{z:.2f}%<extra></extra>"))
+        tv(ofig, max(220, 60 + 48 * len(mat)), unified=False, spikes=False)
+        ofig.update_yaxes(side="left", showgrid=False)
+        ofig.update_xaxes(showgrid=False)
+        chart(ofig)
+
+    if hmap:
+        section("Combined holdings — common rows highlighted")
+        common_only = st.checkbox("Show only common holdings", value=False)
+        comb = H.combined_table(hmap)
+        if common_only:
+            comb = comb[comb["Held by"] >= 2]
+        wcols = [c for c in comb.columns if c not in ("Security", "Held by")]
+        disp = comb.copy()
+        for c in wcols:
+            disp[c] = comb[c].map(
+                lambda v: "—" if pd.isna(v) else f"{v:.2f}")
+        styler = disp.style.apply(
+            lambda r: ["background-color: rgba(14,203,129,0.12)"] * len(r)
+            if comb.loc[r.name, "Held by"] >= 2 else [""] * len(r), axis=1)
+        st.dataframe(styler, hide_index=True, width="stretch",
+                     height=min(40 + 35 * len(disp), 640))
+        uniq = {n: int((comb[wcols].notna().sum(axis=1) == 1)
+                       [comb[n].notna()].sum()) for n in wcols}
+        if len(wcols) >= 2:
+            st.caption("Unique holdings — "
+                       + " · ".join(f"{n}: {u}" for n, u in uniq.items())
+                       + ". Weights are % of corpus; highlighted rows are "
+                         "held by 2+ schemes.")
+    elif have:
+        st.info("No holdings data parsed yet — fetch again later or use the "
+                "manual upload.")
+
+# ---- Peers (category benchmarking) ---- #
+with tabs[7]:
     row = universe[universe["code"] == code]
     peer_cat = row["category"].iloc[0] if not row.empty else None
     if not peer_cat:

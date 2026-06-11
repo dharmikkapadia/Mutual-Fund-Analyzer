@@ -19,8 +19,8 @@ import webbrowser
 
 import customtkinter as ctk
 
-BG, PANEL, TEXT, MUTED, ACCENT = ("#131722", "#1E222D", "#D1D4DC",
-                                  "#787B86", "#2962FF")
+BG, PANEL, TEXT, MUTED, ACCENT = ("#000000", "#101014", "#F2F2F5",
+                                  "#9D9DA8", "#2962FF")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = 8501
 

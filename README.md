@@ -5,11 +5,13 @@ Streamlit core (the analytics + UI) with a customtkinter launcher so it opens
 like a desktop app inside the AFP suite.
 
 ## UI
-Minimal dark theme inspired by TradingView (slate background `#131722`,
-high-contrast text, crosshair hover, right-side axes, 1M/6M/YTD/1Y/3Y/5Y/All
-range buttons, red/green gain-loss semantics). The Streamlit theme lives in
-`.streamlit/config.toml`; chart styling is centralised in the `tv()` helper
-in `app.py` so every chart shares one template.
+Minimal pitch-black theme inspired by TradingView (true-black `#000000`
+background, high-contrast text, crosshair hover, right-side axes,
+1M/6M/YTD/1Y/3Y/5Y/All range buttons, red/green gain-loss semantics).
+Charts are fully interactive: pan by drag, zoom with the scroll wheel, and a
+minimal modebar (zoom/pan/reset/fullscreen/PNG export). The Streamlit theme
+lives in `.streamlit/config.toml`; chart styling is centralised in the
+`tv()` helper in `app.py` so every chart shares one template.
 
 ## Data sources
 | Source | Role |
@@ -46,7 +48,9 @@ entirely (used by headless tests).
 
 ## Features (v1)
 - **Watchlist dashboard** — sortable grid of every scheme in the active list: 1Y NAV sparkline, latest NAV, 1D/1Y/3Y/5Y returns and max drawdown, red/green coded.
-- **Risk ratios** — Sharpe and Sortino over a selectable 1Y/3Y/5Y/All window with a configurable risk-free rate, beside volatility and CAGR on the Overview.
+- **Risk ratios** — Sharpe, Sortino and annualised standard deviation over a selectable 1Y/3Y/5Y/All window with a configurable risk-free rate, plus **beta, Jensen's alpha and R²** against a user-pickable index fund (the AMFI universe's index funds act as the market proxy).
+- **Holdings & overlap** — portfolio holdings via public Groww/Kuvera JSON endpoints (matched by ISIN; Rupeevest is linked per scheme since it has no public API), with fund facts (AUM, expense ratio, fund managers). Select multiple schemes for an **overlap matrix** (sum of min weights) and a combined holdings table with common positions highlighted and unique counts. Manual CSV upload as a fallback. See `holdings.py`.
+- **Fund facts & links** — fund size, expense ratio and manager names on the Overview, plus Rupeevest / factsheet / ValueResearch links per scheme.
 - **Category peers** — benchmark a scheme against its full AMFI category universe (e.g. a small-cap fund vs every other small-cap fund): rank and percentile per horizon, box-plot distribution with the scheme marked, and a sortable peer table. Growth-only and Direct/Regular plan filters keep the peer set honest; histories are fetched once on demand and cached.
 - **Watchlists** — multiple named lists, persisted in the **browser** (localStorage) so they survive cloud restarts and stay per-visitor; `~/.afp_nav_explorer/watchlists.json` remains as the desktop fallback / migration source.
 - **Point-to-point returns** — custom dates, financial-year (Apr–Mar) table, month-on-month table. Absolute always; CAGR shown when the span exceeds 1Y.

@@ -247,6 +247,48 @@ def risk_ratios(series: pd.Series, rf: float = 0.065,
     }
 
 
+def benchmark_stats(series: pd.Series, bench: pd.Series, rf: float = 0.065,
+                    years: float | None = None) -> dict:
+    """Beta, Jensen's alpha and R² of `series` vs a benchmark series.
+
+    Daily returns are aligned on common dates over the trailing `years`
+    window (None = full common history). Beta = cov/var of daily returns;
+    alpha (annual, decimal) = fund CAGR - [rf + beta * (bench CAGR - rf)],
+    both CAGRs compounded from the aligned daily returns. Returns {} when
+    there are fewer than 60 common observations.
+    """
+    s, b = _clean(series), _clean(bench)
+    if s.empty or b.empty:
+        return {}
+    end = min(s.index.max(), b.index.max())
+    start = max(s.index.min(), b.index.min())
+    if years:
+        start = max(start, end - pd.DateOffset(years=int(years)))
+    rs = s[(s.index >= start) & (s.index <= end)].pct_change()
+    rb = b[(b.index >= start) & (b.index <= end)].pct_change()
+    df = pd.concat([rs, rb], axis=1, join="inner").dropna()
+    df.columns = ["f", "m"]
+    if len(df) < 60:
+        return {}
+    var_m = df["m"].var()
+    if not var_m or var_m <= 0:
+        return {}
+    beta = float(df["f"].cov(df["m"]) / var_m)
+    span = (df.index.max() - df.index.min()).days / DAYS_PER_YEAR
+    if span <= 0:
+        return {}
+    fund_cagr = float((1.0 + df["f"]).prod() ** (1.0 / span) - 1.0)
+    bench_cagr = float((1.0 + df["m"]).prod() ** (1.0 / span) - 1.0)
+    corr = float(df["f"].corr(df["m"]))
+    return {
+        "beta": beta,
+        "alpha": fund_cagr - (rf + beta * (bench_cagr - rf)),
+        "r2": corr ** 2,
+        "fund_cagr": fund_cagr, "bench_cagr": bench_cagr,
+        "observations": int(len(df)), "years": float(span),
+    }
+
+
 def snapshot(series: pd.Series, spark_points: int = 60) -> dict:
     """One-row summary for dashboards / peer tables: latest NAV, 1D change,
     1Y absolute, 3Y/5Y CAGR (% values), max drawdown %, and a downsampled
