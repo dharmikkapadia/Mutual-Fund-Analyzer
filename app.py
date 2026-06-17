@@ -1094,8 +1094,12 @@ with tabs[5]:
             for i, col in enumerate(reb.columns):
                 cfig.add_trace(go.Scatter(
                     x=reb.index, y=reb[col], name=col,
+                    customdata=np.array(
+                        [f"{v:+.1f}" for v in reb[col].to_numpy() - 100.0]
+                    ).reshape(-1, 1),
                     line=dict(color=SERIES[i % len(SERIES)], width=1.4),
-                    hovertemplate="%{y:,.1f}<extra>" + col + "</extra>"))
+                    hovertemplate="₹%{y:,.1f}  (%{customdata[0]}%)"
+                                  "<extra>" + col + "</extra>"))
             tv(cfig, 420, legend=True)
             range_buttons(cfig)
             st.caption("Growth of ₹100 from a common start date.")
@@ -1384,11 +1388,15 @@ with tabs[7]:
                     is_avg = col == avg_name
                     pfig.add_trace(go.Scatter(
                         x=reb.index, y=reb[col], name=col,
+                        customdata=np.array(
+                            [f"{v:+.1f}" for v in reb[col].to_numpy() - 100.0]
+                        ).reshape(-1, 1),
                         line=dict(color=MUTED if is_avg
                                   else SERIES[i % len(SERIES)],
                                   width=2.2 if is_avg else 1.4,
                                   dash="dash" if is_avg else "solid"),
-                        hovertemplate="₹%{y:,.1f}<extra>" + col + "</extra>"))
+                        hovertemplate="₹%{y:,.1f}  (%{customdata[0]}%)"
+                                      "<extra>" + col + "</extra>"))
                 tv(pfig, 420, legend=True)
                 range_buttons(pfig)
                 st.caption("Growth of ₹100 from a common start date. "
@@ -1554,9 +1562,12 @@ with tabs[8]:
             section("Portfolio growth (₹100)")
             gfig = go.Figure(go.Scatter(
                 x=port.index, y=port.values, name="Portfolio",
+                customdata=np.array(
+                    [f"{v:+.1f}" for v in port.values - 100.0]).reshape(-1, 1),
                 line=dict(color=ACCENT, width=1.6),
                 fill="tozeroy", fillcolor=rgba(ACCENT, 0.07),
-                hovertemplate="₹%{y:,.1f}<extra>Portfolio</extra>"))
+                hovertemplate="₹%{y:,.1f}  (%{customdata[0]}%)"
+                              "<extra>Portfolio</extra>"))
             tv(gfig, 380)
             range_buttons(gfig)
             st.caption(f"Weighted blend over the common history of "
