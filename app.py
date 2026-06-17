@@ -69,6 +69,14 @@ def on_color(hex_color: str) -> str:
     return "#0E1116" if lum > 0.4 else "#FFFFFF"
 
 
+def mix(c1: str, c2: str, t: float) -> str:
+    """Linear blend of two hex colours; t=0 -> c1, t=1 -> c2."""
+    a, b = c1.lstrip("#"), c2.lstrip("#")
+    ch = [round(int(a[i:i + 2], 16) * (1 - t) + int(b[i:i + 2], 16) * t)
+          for i in (0, 2, 4)]
+    return "#%02x%02x%02x" % tuple(ch)
+
+
 def _apply_native_theme(t: dict) -> bool:
     """Point Streamlit's own widget theme at the active palette."""
     opts = {"theme.base": t["base"], "theme.backgroundColor": t["bg"],
@@ -83,8 +91,11 @@ def _apply_native_theme(t: dict) -> bool:
 
 
 def _on_theme_change():
+    # Native widgets and st.dataframe read Streamlit's server-side theme
+    # config, which only repaints on a fresh page load — so a theme change
+    # persists the choice and reloads (handled near the top of the script).
     st.session_state.theme = st.session_state.theme_pick
-    _apply_native_theme(THEMES[st.session_state.theme])
+    st.session_state._theme_changed = True
 
 
 st.set_page_config(page_title="AFP NAV Explorer", page_icon="📈",
@@ -133,9 +144,17 @@ BG, PANEL, GRID = T["bg"], T["panel"], T["grid"]
 TEXT, MUTED = T["text"], T["muted"]
 ACCENT, UP, DOWN = T["accent"], T["up"], T["down"]
 ON_ACCENT = on_color(ACCENT)
+IS_DARK = T["base"] == "dark"
 SERIES = [ACCENT, "#FF9800", UP, "#E040FB", "#26C6DA", DOWN]
-SHADOW = ("0 6px 18px rgba(0,0,0,.35)" if T["base"] == "dark"
+SHADOW = ("0 6px 18px rgba(0,0,0,.35)" if IS_DARK
           else "0 6px 18px rgba(0,0,0,.12)")
+# active range-selector button: solid accent reads with light text on dark
+# themes; on light themes use a pale tint so the dark body text stays legible
+RANGE_ACTIVE = ACCENT if IS_DARK else mix(ACCENT, BG, 0.72)
+# heatmaps don't follow the native theme, so colour their cell text explicitly;
+# the overlap scale tops out at a mid tint on light themes so TEXT stays read.
+OV_SCALE = ([[0, PANEL], [1, ACCENT]] if IS_DARK
+            else [[0, BG], [1, mix(ACCENT, BG, 0.5)]])
 if _apply_native_theme(T):
     # frontend picks the new widget theme up on the next run
     st.rerun()
@@ -147,6 +166,15 @@ if USE_BROWSER_STORE:
         js_expressions=f"localStorage.setItem('{LS_KEY}', "
                        f"{json.dumps(_payload)})",
         key="ls_write")
+    if st.session_state.pop("_theme_changed", False):
+        # persist the new theme then hard-reload so the native widget theme
+        # (and st.dataframe) repaint cleanly from the bootstrap
+        streamlit_js_eval(
+            js_expressions=(f"localStorage.setItem('{LS_THEME}', "
+                            f"{json.dumps(st.session_state.theme)}); "
+                            f"parent.window.location.reload();"),
+            key="theme_reload")
+        st.stop()
     streamlit_js_eval(
         js_expressions=f"localStorage.setItem('{LS_THEME}', "
                        f"{json.dumps(st.session_state.theme)})",
@@ -213,6 +241,38 @@ st.markdown(f"""
   [data-baseweb="tag"] [role="button"]:hover {{opacity: 1;
     background-color: {rgba(ON_ACCENT, 0.25)};}}
   [data-baseweb="select"] [data-baseweb="tag"] {{margin: 2px 3px;}}
+
+  /* ---- surfaces: paint immediately so theme switches never flash a
+     stale background before the native-theme reload settles ---- */
+  .stApp, [data-testid="stAppViewContainer"],
+  [data-testid="stMain"] {{background-color: {BG};}}
+  [data-testid="stSidebar"] {{background-color: {PANEL};}}
+
+  /* ---- inputs: consistent panel fill + readable text ---- */
+  [data-baseweb="select"] > div, [data-baseweb="input"],
+  [data-testid="stTextInput"] input, [data-testid="stNumberInput"] input,
+  [data-testid="stDateInput"] input, textarea {{
+    background-color: {PANEL} !important; color: {TEXT} !important;
+    border-color: {GRID} !important;}}
+  [data-baseweb="select"] svg {{fill: {MUTED} !important;}}
+
+  /* ---- dropdown menus: panel surface, accent highlight (same contrast
+     rule as the chips) ---- */
+  [data-baseweb="popover"] ul, [data-baseweb="menu"] ul,
+  [data-baseweb="popover"] [role="listbox"] {{
+    background-color: {PANEL} !important; border: 1px solid {GRID};}}
+  [role="option"] {{color: {TEXT} !important;}}
+  [role="option"]:hover, [role="option"][aria-selected="true"] {{
+    background-color: {ACCENT} !important; color: {ON_ACCENT} !important;}}
+
+  /* ---- buttons: primary on accent (high contrast), secondary on panel ---- */
+  [data-testid="stBaseButton-primary"],
+  [data-testid="stBaseButton-primary"] * {{
+    background-color: {ACCENT} !important; color: {ON_ACCENT} !important;
+    border-color: {ACCENT} !important;}}
+  [data-testid="stBaseButton-secondary"] {{
+    background-color: {PANEL} !important; color: {TEXT} !important;
+    border-color: {GRID} !important;}}
 
   /* ---- motion ---- */
   html {{scroll-behavior: smooth;}}
@@ -282,7 +342,7 @@ def range_buttons(fig: go.Figure) -> go.Figure:
             dict(count=5, label="5Y", step="year", stepmode="backward"),
             dict(label="All", step="all"),
         ],
-        x=0, y=1.12, bgcolor=PANEL, activecolor=ACCENT,
+        x=0, y=1.12, bgcolor=PANEL, activecolor=RANGE_ACTIVE,
         bordercolor=GRID, borderwidth=1, font=dict(color=TEXT, size=11)))
     return fig
 
@@ -648,7 +708,7 @@ with tabs[1]:
         hm = go.Figure(go.Heatmap(
             z=mat.values, x=mat.columns, y=mat.index.astype(str),
             colorscale=[[0, DOWN], [0.5, PANEL], [1, UP]], zmid=0,
-            texttemplate="%{z:.1f}", textfont=dict(size=10),
+            texttemplate="%{z:.1f}", textfont=dict(size=10, color=TEXT),
             showscale=False, hoverongaps=False,
             hovertemplate="%{x} %{y}: %{z:.2f}%<extra></extra>",
             xgap=2, ygap=2))
@@ -913,8 +973,8 @@ with tabs[6]:
         short = [n[:30] + "…" if len(n) > 30 else n for n in mat.index]
         ofig = go.Figure(go.Heatmap(
             z=mat.values, x=short, y=short,
-            colorscale=[[0, PANEL], [1, ACCENT]], zmin=0, zmax=100,
-            texttemplate="%{z:.1f}%", textfont=dict(size=12),
+            colorscale=OV_SCALE, zmin=0, zmax=100,
+            texttemplate="%{z:.1f}%", textfont=dict(size=12, color=TEXT),
             showscale=False, xgap=2, ygap=2,
             hovertemplate="%{y} ∩ %{x}: %{z:.2f}%<extra></extra>"))
         tv(ofig, max(220, 60 + 48 * len(mat)), unified=False, spikes=False)
