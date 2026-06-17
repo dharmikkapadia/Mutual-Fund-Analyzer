@@ -59,6 +59,16 @@ def rgba(hex_color: str, alpha: float) -> str:
             f"{int(h[4:6], 16)},{alpha})")
 
 
+def on_color(hex_color: str) -> str:
+    """Black or white, whichever reads better on `hex_color` (WCAG luminance)."""
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    lin = [(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+           for c in (r, g, b)]
+    lum = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+    return "#0E1116" if lum > 0.4 else "#FFFFFF"
+
+
 def _apply_native_theme(t: dict) -> bool:
     """Point Streamlit's own widget theme at the active palette."""
     opts = {"theme.base": t["base"], "theme.backgroundColor": t["bg"],
@@ -122,6 +132,7 @@ T = THEMES[st.session_state.theme]
 BG, PANEL, GRID = T["bg"], T["panel"], T["grid"]
 TEXT, MUTED = T["text"], T["muted"]
 ACCENT, UP, DOWN = T["accent"], T["up"], T["down"]
+ON_ACCENT = on_color(ACCENT)
 SERIES = [ACCENT, "#FF9800", UP, "#E040FB", "#26C6DA", DOWN]
 SHADOW = ("0 6px 18px rgba(0,0,0,.35)" if T["base"] == "dark"
           else "0 6px 18px rgba(0,0,0,.12)")
@@ -187,6 +198,21 @@ st.markdown(f"""
   [data-testid="stSidebar"] {{border-right: 1px solid {GRID};}}
   [data-testid="stSidebar"] .block-container {{padding-top: 1.2rem;}}
   hr {{border-color: {GRID};}}
+
+  /* ---- multiselect chips: solid accent, high-contrast text ---- */
+  [data-baseweb="tag"] {{background-color: {ACCENT} !important;
+    border-radius: 6px;}}
+  [data-baseweb="tag"], [data-baseweb="tag"] span,
+  [data-baseweb="tag"] div {{color: {ON_ACCENT} !important;
+    font-weight: 500;}}
+  [data-baseweb="tag"] svg {{fill: {ON_ACCENT} !important;
+    color: {ON_ACCENT} !important;}}
+  [data-baseweb="tag"] [role="button"] {{opacity: .8;
+    border-radius: 4px; transition: opacity .15s ease,
+    background-color .15s ease;}}
+  [data-baseweb="tag"] [role="button"]:hover {{opacity: 1;
+    background-color: {rgba(ON_ACCENT, 0.25)};}}
+  [data-baseweb="select"] [data-baseweb="tag"] {{margin: 2px 3px;}}
 
   /* ---- motion ---- */
   html {{scroll-behavior: smooth;}}
