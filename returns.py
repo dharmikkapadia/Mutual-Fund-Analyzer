@@ -338,6 +338,7 @@ def snapshot(series: pd.Series, spark_points: int = 60) -> dict:
         else:
             out[label] = np.nan
     out["mdd"] = max_drawdown(s) * 100
+    out["vol"] = annualised_vol(s) * 100
     spark = s[s.index >= end - pd.DateOffset(years=1)]
     if len(spark) > spark_points:
         spark = spark.iloc[np.linspace(0, len(spark) - 1,
@@ -447,3 +448,148 @@ def compare_trailing(named_series: dict) -> pd.DataFrame:
         # prefer annualised where present, else absolute
         frames[name] = t["Annualised %"].fillna(t["Absolute %"])
     return pd.DataFrame(frames)
+
+
+# --------------------------------------------------------------------------- #
+# Benchmark-relative: capture ratios
+# --------------------------------------------------------------------------- #
+def capture_ratios(series: pd.Series, bench: pd.Series,
+                   years: float | None = None) -> dict:
+    """Up/down capture vs a benchmark on monthly returns (Morningstar style).
+
+    Up-capture = compounded fund return in months the benchmark rose /
+    compounded benchmark return in those months × 100 (and symmetrically for
+    down months). Up-capture > 100 and down-capture < 100 are both desirable.
+    Needs ≥ 12 common months; returns {} otherwise.
+    """
+    s, b = _clean(series), _clean(bench)
+    if s.empty or b.empty:
+        return {}
+    if years:
+        cutoff = min(s.index.max(), b.index.max()) - pd.DateOffset(
+            years=int(years))
+        s, b = s[s.index >= cutoff], b[b.index >= cutoff]
+    fm = s.resample("ME").last().pct_change()
+    bm = b.resample("ME").last().pct_change()
+    df = pd.concat([fm, bm], axis=1, join="inner").dropna()
+    df.columns = ["f", "m"]
+    if len(df) < 12:
+        return {}
+
+    def comp(x):
+        return float(np.prod(1.0 + x.to_numpy()) - 1.0)
+
+    up, dn = df[df["m"] > 0], df[df["m"] < 0]
+    out = {"months": int(len(df))}
+    if len(up) and comp(up["m"]) != 0:
+        out["up_capture"] = comp(up["f"]) / comp(up["m"]) * 100
+        out["up_months"] = int(len(up))
+    if len(dn) and comp(dn["m"]) != 0:
+        out["down_capture"] = comp(dn["f"]) / comp(dn["m"]) * 100
+        out["down_months"] = int(len(dn))
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Drawdown episodes (depth + recovery)
+# --------------------------------------------------------------------------- #
+def drawdown_table(series: pd.Series, top: int = 5) -> pd.DataFrame:
+    """The `top` deepest drawdowns: peak/trough/recovery dates, depth %, and
+    days to trough / to recover. recovery is NaT for an ongoing drawdown."""
+    s = _clean(series)
+    cols = ["Peak", "Trough", "Recovery", "Depth %",
+            "Days to trough", "Recovery days"]
+    if s.empty:
+        return pd.DataFrame(columns=cols)
+    vals = s.to_numpy()
+    dates = s.index
+    episodes, cur = [], None
+    peak_val, peak_date = vals[0], dates[0]
+    for v, d in zip(vals, dates):
+        if v >= peak_val:
+            if cur is not None:
+                cur["Recovery"] = d
+                cur["Recovery days"] = (d - cur["Trough"]).days
+                episodes.append(cur)
+                cur = None
+            peak_val, peak_date = v, d
+        else:
+            if cur is None:
+                cur = {"Peak": peak_date, "_peak_val": peak_val,
+                       "Trough": d, "_trough_val": v}
+            elif v < cur["_trough_val"]:
+                cur["Trough"], cur["_trough_val"] = d, v
+    if cur is not None:                       # still underwater at the end
+        cur["Recovery"] = pd.NaT
+        cur["Recovery days"] = np.nan
+        episodes.append(cur)
+    if not episodes:
+        return pd.DataFrame(columns=cols)
+    for e in episodes:
+        e["Depth %"] = (e["_trough_val"] / e["_peak_val"] - 1.0) * 100
+        e["Days to trough"] = (e["Trough"] - e["Peak"]).days
+    df = pd.DataFrame(episodes).sort_values("Depth %").head(top)
+    for c in ("Peak", "Trough", "Recovery"):
+        df[c] = pd.to_datetime(df[c]).dt.date
+    return df[cols].reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------- #
+# SIP goal planning & corpus projection
+# --------------------------------------------------------------------------- #
+def required_sip(target: float, years: float, annual_rate: float) -> float:
+    """Monthly SIP (invested at each month start) needed to reach `target`
+    in `years` at `annual_rate` (decimal). Annuity-due future-value factor."""
+    n = max(1, int(round(years * 12)))
+    r = (1.0 + annual_rate) ** (1.0 / 12) - 1.0
+    fv = n if abs(r) < 1e-9 else ((1.0 + r) ** n - 1.0) / r * (1.0 + r)
+    return target / fv if fv else np.nan
+
+
+def sip_projection(monthly: float, years: float, annual_rate: float):
+    """(months, corpus, invested) arrays for a monthly SIP at `annual_rate`."""
+    n = max(1, int(round(years * 12)))
+    r = (1.0 + annual_rate) ** (1.0 / 12) - 1.0
+    months = np.arange(0, n + 1)
+    invested = monthly * months
+    if abs(r) < 1e-9:
+        corpus = monthly * months.astype(float)
+    else:
+        corpus = monthly * ((1.0 + r) ** months - 1.0) / r * (1.0 + r)
+    return months, corpus, invested
+
+
+# --------------------------------------------------------------------------- #
+# Portfolio-level analytics
+# --------------------------------------------------------------------------- #
+def blend(named_series: dict, weights: dict) -> pd.Series:
+    """Weighted growth-of-100 index of several schemes over their common
+    history (daily, forward-filled). Weights are normalised; missing → 0."""
+    cleaned = {n: _daily(s) for n, s in named_series.items()
+               if not _clean(s).empty}
+    if not cleaned:
+        return pd.Series(dtype=float)
+    df = pd.DataFrame(cleaned).dropna()
+    if df.empty:
+        return pd.Series(dtype=float)
+    reb = df / df.iloc[0] * 100.0
+    w = np.array([max(0.0, float(weights.get(n, 0.0)))
+                  for n in df.columns], dtype=float)
+    if w.sum() <= 0:
+        w = np.ones(len(df.columns))
+    w = w / w.sum()
+    return (reb * w).sum(axis=1)
+
+
+def correlation_matrix(named_series: dict, freq: str = "W") -> pd.DataFrame:
+    """Correlation of periodic (default weekly) returns across schemes."""
+    cols = {}
+    for n, s in named_series.items():
+        s = _clean(s)
+        if s.empty:
+            continue
+        cols[n] = s.resample(freq).last().pct_change()
+    df = pd.DataFrame(cols).dropna()
+    if df.shape[0] < 3 or df.shape[1] < 2:
+        return pd.DataFrame()
+    return df.corr()

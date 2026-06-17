@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 
 import numpy as np
 import pandas as pd
@@ -383,10 +384,68 @@ def get_portfolio(isin: str, name: str, amfi_code: int | None = None) -> dict:
     return H.fetch_portfolio(isin, name, amfi_code)
 
 
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def peer_rolling_band(codes: tuple, win: int) -> pd.DataFrame:
+    """median / p25 / p75 of the `win`-year rolling annualised return across
+    a set of peer schemes, aligned on a common daily index. Cached on the
+    sorted code tuple so it only recomputes when the peer set changes."""
+    cols = {}
+    for c in codes:
+        try:
+            s, _ = get_history(c)
+            r = R.rolling_returns(s, win)
+            if not r.empty:
+                cols[c] = r
+        except Exception:  # noqa: BLE001
+            pass
+    if len(cols) < 3:
+        return pd.DataFrame()
+    df = pd.DataFrame(cols).dropna(how="all")
+    if df.empty:
+        return pd.DataFrame()
+    return pd.DataFrame({"median": df.median(axis=1),
+                         "p25": df.quantile(0.25, axis=1),
+                         "p75": df.quantile(0.75, axis=1)}).dropna()
+
+
 def isin_of(univ: pd.DataFrame, code: int) -> str:
     row = univ[univ["code"] == code]
     isin = row["isin"].iloc[0] if not row.empty else ""
     return isin if isinstance(isin, str) and len(isin) >= 8 else ""
+
+
+_PLAN_WORDS = {"direct", "regular", "growth", "idcw", "dividend", "payout",
+               "reinvestment", "plan", "option", "reg", "dir", "bonus"}
+
+
+def _core_words(name: str) -> frozenset:
+    toks = re.sub(r"[^a-z0-9]+", " ", str(name).lower()).split()
+    return frozenset(t for t in toks if t not in _PLAN_WORDS)
+
+
+def find_sibling_plan(univ: pd.DataFrame, code: int):
+    """The same scheme's opposite plan (Direct↔Regular) from the universe,
+    matched on the plan-stripped name within the same category. None if
+    no confident single match."""
+    row = univ[univ["code"] == code]
+    if row.empty:
+        return None
+    name = str(row["name"].iloc[0])
+    core, cat = _core_words(name), row["category"].iloc[0]
+    is_direct = "direct" in name.lower()
+    pool = univ[(univ["category"] == cat) & (univ["code"] != code)]
+    if "growth" in name.lower():
+        pool = pool[pool["name"].str.contains("growth", case=False, na=False)]
+    best = None
+    for _, r in pool.iterrows():
+        nm = str(r["name"])
+        if ("direct" in nm.lower()) == is_direct:        # need the other plan
+            continue
+        if _core_words(nm) == core:
+            if best is not None:
+                return None                               # ambiguous
+            best = r
+    return best
 
 
 def links_md(name: str, rv_code=None) -> str:
@@ -526,7 +585,7 @@ m4.metric("5Y CAGR", pct(tr.loc["5Y", "Annualised %"]) if "5Y" in tr.index else 
 m5.metric("Max drawdown", pct(R.max_drawdown(series) * 100))
 
 tabs = st.tabs(["Dashboard", "Overview", "Returns", "Rolling", "SIP / XIRR",
-                "Compare", "Holdings", "Peers"])
+                "Compare", "Holdings", "Peers", "Portfolio"])
 
 RET_COLS = ["1D %", "1Y %", "3Y % pa", "5Y % pa"]
 
@@ -689,6 +748,70 @@ with tabs[1]:
         else:
             st.caption("Beta/alpha need ≥60 overlapping NAV days with the "
                        "benchmark.")
+
+        # up/down capture vs the same benchmark
+        try:
+            cap = R.capture_ratios(series, bench_series, win_yrs)
+        except Exception:  # noqa: BLE001
+            cap = {}
+        if cap.get("up_capture") is not None or cap.get("down_capture"):
+            cc1, cc2 = st.columns(2)
+            cc1.metric("Up capture",
+                       f"{cap['up_capture']:.0f}%" if cap.get("up_capture")
+                       is not None else "—",
+                       help="Share of the benchmark's gains captured in "
+                            "up months. Higher is better.")
+            cc2.metric("Down capture",
+                       f"{cap['down_capture']:.0f}%" if cap.get("down_capture")
+                       is not None else "—",
+                       help="Share of the benchmark's losses taken in down "
+                            "months. Lower is better.",
+                       delta_color="inverse")
+            st.caption(f"Monthly capture over {cap.get('months', 0)} common "
+                       f"months ({cap.get('up_months', 0)} up / "
+                       f"{cap.get('down_months', 0)} down).")
+
+    section("Worst drawdowns & recovery")
+    ddt = R.drawdown_table(series, top=5)
+    if ddt.empty:
+        st.caption("No drawdown episodes found.")
+    else:
+        disp = ddt.copy()
+        disp["Depth %"] = disp["Depth %"].map(lambda v: f"{v:.2f}")
+        disp["Recovery"] = disp["Recovery"].map(
+            lambda v: "ongoing" if pd.isna(v) else str(v))
+        disp["Recovery days"] = disp["Recovery days"].map(
+            lambda v: "—" if pd.isna(v) else f"{int(v):,}")
+        st.dataframe(disp, hide_index=True, width="stretch")
+        st.caption("Deepest peak-to-trough falls, with calendar days to the "
+                   "trough and to full recovery. “ongoing” = not yet recovered.")
+
+    # direct vs regular plan gap (purely NAV-based; both must be in the universe)
+    sib = find_sibling_plan(universe, code)
+    if sib is not None:
+        try:
+            sib_series, _ = get_history(int(sib["code"]))
+            this_si = R.point_to_point(series, series.index.min(),
+                                       series.index.max())
+            both_start = max(series.index.min(), sib_series.index.min())
+            a = R.point_to_point(series, both_start, series.index.max())
+            b = R.point_to_point(sib_series, both_start, sib_series.index.max())
+            ra = a["cagr"] if a["cagr"] is not None else a["abs"]
+            rb = b["cagr"] if b["cagr"] is not None else b["abs"]
+            if ra is not None and rb is not None:
+                section(f"Plan comparison — this vs its "
+                        f"{'Regular' if 'direct' in name_of(universe, code).lower() else 'Direct'} plan")
+                g1, g2, g3 = st.columns(3)
+                g1.metric("This plan CAGR", pct(ra * 100))
+                g2.metric("Other plan CAGR", pct(rb * 100))
+                g3.metric("Annual gap", pct((ra - rb) * 100),
+                          help="Expense-ratio drag shows up as a persistent "
+                               "CAGR gap between Direct and Regular plans of "
+                               "the same scheme.")
+                st.caption(f"Other plan: {sib['name']} · since common start "
+                           f"{both_start.date()}.")
+        except Exception:  # noqa: BLE001
+            pass
 
     section("Calendar-year returns")
     cal = R.calendar_year_returns(series)
@@ -872,6 +995,69 @@ with tabs[4]:
         st.caption("XIRR is the money-weighted annualised return on the SIP "
                    "cashflows. Lumpsum CAGR for the same window is on the "
                    "Returns tab.")
+
+    # ---- goal planner ---- #
+    section("Goal planner")
+    st.caption("How much to invest monthly to reach a target — using this "
+               "fund's own historical rolling-return distribution as the "
+               "optimistic / median / pessimistic range.")
+    g1, g2, g3 = st.columns(3)
+    target = g1.number_input("Target corpus (₹)", value=10_000_000,
+                             step=500_000, min_value=10_000)
+    horizon = g2.number_input("Years to goal", value=10, min_value=1,
+                              max_value=40)
+    win_avail = max(1, min(5, int((series.index.max()
+                                   - series.index.min()).days / 365.25)))
+    roll_win = g3.selectbox("Return basis (rolling window)",
+                            [w for w in (1, 3, 5) if w <= win_avail] or [1],
+                            index=0,
+                            help="Required SIP is computed from the spread of "
+                                 "this fund's historical N-year rolling "
+                                 "annualised returns.")
+    roll = R.rolling_returns(series, roll_win)
+    stt = R.rolling_stats(roll)
+    if stt:
+        scen = {"Pessimistic (25th pct)": stt["p25"],
+                "Median": stt["median"],
+                "Optimistic (75th pct)": stt["p75"]}
+        sc = st.columns(3)
+        for (lbl, rate), col in zip(scen.items(), sc):
+            need = R.required_sip(target, horizon, rate)
+            col.metric(lbl.split(" (")[0],
+                       f"₹{need:,.0f}/mo" if need == need else "—",
+                       f"{rate*100:.1f}% pa", delta_color="off")
+        st.caption(f"Based on {stt['observations']:,} historical {roll_win}Y "
+                   "rolling windows. Past returns don't guarantee future "
+                   "results — treat these as a planning range, not a forecast.")
+
+        section("Projected corpus")
+        pfig = go.Figure()
+        colors = {"Pessimistic (25th pct)": DOWN, "Median": ACCENT,
+                  "Optimistic (75th pct)": UP}
+        med_sip = R.required_sip(target, horizon, scen["Median"])
+        for lbl, rate in scen.items():
+            months, corpus, invested = R.sip_projection(med_sip, horizon, rate)
+            pfig.add_trace(go.Scatter(
+                x=months / 12, y=corpus, name=lbl,
+                line=dict(color=colors[lbl],
+                          width=1.6 if lbl == "Median" else 1.2,
+                          dash="solid" if lbl == "Median" else "dot"),
+                hovertemplate="yr %{x:.1f}: ₹%{y:,.0f}<extra>"
+                              + lbl + "</extra>"))
+        _, _, invested = R.sip_projection(med_sip, horizon, scen["Median"])
+        pfig.add_trace(go.Scatter(
+            x=months / 12, y=invested, name="Invested",
+            line=dict(color=MUTED, width=1, dash="dash"),
+            hovertemplate="yr %{x:.1f}: ₹%{y:,.0f}<extra>Invested</extra>"))
+        pfig.add_hline(y=target, line_dash="dot", line_color=MUTED,
+                       line_width=1)
+        tv(pfig, 340, legend=True)
+        chart(pfig)
+        st.caption(f"Corpus path for a ₹{med_sip:,.0f}/mo SIP (the median-rate "
+                   f"requirement) under each return scenario. Dotted line = "
+                   f"₹{target:,.0f} target.")
+    else:
+        st.caption("Not enough history for a rolling-return based plan.")
 
 # ---- Compare ---- #
 with tabs[5]:
@@ -1088,7 +1274,7 @@ with tabs[7]:
                             "NAV": snap["nav"], "1Y trend": snap["spark"],
                             "1D %": snap["chg_1d"], "1Y %": snap["1Y"],
                             "3Y % pa": snap["3Y"], "5Y % pa": snap["5Y"],
-                            "Max DD %": snap["mdd"]})
+                            "Max DD %": snap["mdd"], "Vol %": snap["vol"]})
                 except Exception:  # noqa: BLE001
                     pass
                 prog.progress((i + 1) / len(peers))
@@ -1193,6 +1379,84 @@ with tabs[7]:
                            "Hover for values; drag to pan, scroll to zoom.")
                 chart(pfig)
 
+            # risk-vs-return scatter: every peer as a dot (x=vol, y=3Y CAGR)
+            risk_pts = [r for r in peer_rows
+                        if r.get("Vol %") is not None
+                        and not pd.isna(r.get("Vol %"))
+                        and r.get("3Y % pa") is not None
+                        and not pd.isna(r.get("3Y % pa"))]
+            if len(risk_pts) >= 3:
+                section("Risk vs return (3Y)")
+                xs = [r["Vol %"] for r in risk_pts]
+                ys = [r["3Y % pa"] for r in risk_pts]
+                names = [r["Scheme"] for r in risk_pts]
+                is_me = [r["Code"] == code for r in risk_pts]
+                scat = go.Figure()
+                scat.add_trace(go.Scatter(
+                    x=[v for v, m in zip(xs, is_me) if not m],
+                    y=[v for v, m in zip(ys, is_me) if not m],
+                    text=[n for n, m in zip(names, is_me) if not m],
+                    mode="markers", name="Peers",
+                    marker=dict(color=MUTED, size=8, opacity=0.55),
+                    hovertemplate="%{text}<br>vol %{x:.1f}%· "
+                                  "3Y %{y:.1f}%<extra></extra>"))
+                # median cross-hairs
+                scat.add_vline(x=float(np.median(xs)), line_dash="dot",
+                               line_color=MUTED, line_width=1)
+                scat.add_hline(y=float(np.median(ys)), line_dash="dot",
+                               line_color=MUTED, line_width=1)
+                if any(is_me):
+                    scat.add_trace(go.Scatter(
+                        x=[v for v, m in zip(xs, is_me) if m],
+                        y=[v for v, m in zip(ys, is_me) if m],
+                        text=[n for n, m in zip(names, is_me) if m],
+                        mode="markers", name="This scheme",
+                        marker=dict(color=ACCENT, size=14,
+                                    line=dict(color=TEXT, width=1.5)),
+                        hovertemplate="%{text}<br>vol %{x:.1f}%· "
+                                      "3Y %{y:.1f}%<extra></extra>"))
+                tv(scat, 380, legend=True, unified=False, spikes=False)
+                scat.update_xaxes(title="Annualised volatility %")
+                scat.update_yaxes(title="3Y CAGR %", side="left")
+                chart(scat)
+                st.caption("Up and to the left is better (more return per unit "
+                           "of risk). Dotted lines mark the category median; "
+                           "the top-left quadrant beats the median on both.")
+
+            # rolling-return consistency vs the peer median
+            rband = peer_rolling_band(
+                tuple(sorted(r["Code"] for r in peer_rows)), 3)
+            if rband is not None and not rband.empty:
+                section("3Y rolling return — this scheme vs peer median")
+                rfig = go.Figure()
+                rfig.add_trace(go.Scatter(
+                    x=rband.index, y=rband["p75"] * 100, name="Peer 75th pct",
+                    line=dict(width=0), showlegend=False,
+                    hoverinfo="skip"))
+                rfig.add_trace(go.Scatter(
+                    x=rband.index, y=rband["p25"] * 100, name="Peer 25–75%",
+                    fill="tonexty", fillcolor=rgba(MUTED, 0.18),
+                    line=dict(width=0),
+                    hovertemplate="%{y:.1f}%<extra>Peer 25th pct</extra>"))
+                rfig.add_trace(go.Scatter(
+                    x=rband.index, y=rband["median"] * 100, name="Peer median",
+                    line=dict(color=MUTED, width=1.2, dash="dash"),
+                    hovertemplate="%{y:.1f}%<extra>Peer median</extra>"))
+                try:
+                    my_roll = R.rolling_returns(series, 3)
+                    rfig.add_trace(go.Scatter(
+                        x=my_roll.index, y=my_roll.values * 100,
+                        name="This scheme",
+                        line=dict(color=ACCENT, width=1.6),
+                        hovertemplate="%{y:.1f}%<extra>This scheme</extra>"))
+                except Exception:  # noqa: BLE001
+                    pass
+                tv(rfig, 360, legend=True)
+                range_buttons(rfig)
+                st.caption("How the fund's 3Y rolling return has tracked the "
+                           "shaded peer 25–75% band over time — consistency, "
+                           "not just a single end-point ranking.")
+
             section("Peer table")
             snapshot_table(
                 sorted(peer_rows,
@@ -1228,6 +1492,79 @@ with tabs[7]:
         elif cached and cached[0] != peer_key:
             st.info("Filters changed — reload peer returns to refresh "
                     "the comparison.")
+
+# ---- Portfolio (weighted watchlist blend) ---- #
+with tabs[8]:
+    section("Blended portfolio")
+    st.caption("Treat the watchlist as one portfolio: set weights, then see "
+               "the blended growth, risk metrics and how correlated the "
+               "holdings are. Analysis runs over the schemes' common history.")
+    if len(codes) < 2:
+        st.info("Add at least two schemes to the watchlist to build a "
+                "portfolio.")
+    else:
+        port_pick = st.multiselect(
+            "Schemes in the portfolio", list(scheme_labels.keys()),
+            default=list(scheme_labels.keys()), key="port_pick")
+        weights, named_pf = {}, {}
+        if port_pick:
+            st.caption("Weights (need not sum to 100 — they're normalised).")
+            wcols = st.columns(min(4, len(port_pick)))
+            for i, lbl in enumerate(port_pick):
+                nm = lbl.split("  ·")[0]
+                weights[nm] = wcols[i % len(wcols)].number_input(
+                    nm[:18], min_value=0.0, value=round(100 / len(port_pick), 1),
+                    step=5.0, key=f"w_{scheme_labels[lbl]}")
+                try:
+                    named_pf[nm], _ = get_history(scheme_labels[lbl])
+                except Exception:  # noqa: BLE001
+                    st.warning(f"Skipped {nm} (fetch failed).")
+        port = R.blend(named_pf, weights) if named_pf else pd.Series(dtype=float)
+        if not port.empty:
+            tot = sum(max(0.0, w) for w in weights.values()) or 1
+            m1, m2, m3, m4 = st.columns(4)
+            p_si = R.point_to_point(port, port.index.min(), port.index.max())
+            m1.metric("Blended CAGR",
+                      pct((p_si["cagr"] if p_si["cagr"] is not None
+                           else p_si["abs"]) * 100))
+            m2.metric("Volatility", pct(R.annualised_vol(port) * 100))
+            m3.metric("Max drawdown", pct(R.max_drawdown(port) * 100))
+            rr_p = R.risk_ratios(port, rf)
+            m4.metric("Sharpe", f"{rr_p['sharpe']:.2f}"
+                      if rr_p and not np.isnan(rr_p["sharpe"]) else "—")
+
+            section("Portfolio growth (₹100)")
+            gfig = go.Figure(go.Scatter(
+                x=port.index, y=port.values, name="Portfolio",
+                line=dict(color=ACCENT, width=1.6),
+                fill="tozeroy", fillcolor=rgba(ACCENT, 0.07),
+                hovertemplate="₹%{y:,.1f}<extra>Portfolio</extra>"))
+            tv(gfig, 380)
+            range_buttons(gfig)
+            st.caption(f"Weighted blend over the common history of "
+                       f"{len(named_pf)} schemes since {port.index.min().date()}.")
+            chart(gfig)
+
+            cm = R.correlation_matrix(named_pf)
+            if not cm.empty:
+                section("Correlation of weekly returns")
+                short = [n[:24] + "…" if len(n) > 24 else n for n in cm.index]
+                cfig = go.Figure(go.Heatmap(
+                    z=cm.values, x=short, y=short, zmin=-1, zmax=1,
+                    colorscale=[[0, DOWN], [0.5, PANEL], [1, UP]], zmid=0,
+                    texttemplate="%{z:.2f}", textfont=dict(size=11, color=TEXT),
+                    showscale=False, xgap=2, ygap=2,
+                    hovertemplate="%{y} ↔ %{x}: %{z:.2f}<extra></extra>"))
+                tv(cfig, max(240, 60 + 46 * len(cm)), unified=False,
+                   spikes=False)
+                cfig.update_yaxes(side="left", showgrid=False)
+                cfig.update_xaxes(showgrid=False)
+                chart(cfig)
+                st.caption("Lower correlations (toward 0 or red) mean better "
+                           "diversification — the funds move less in lockstep.")
+        elif port_pick:
+            st.info("Not enough overlapping history across the selected "
+                    "schemes to blend.")
 
 st.divider()
 st.caption("Data: AMFI NAVAll.txt (universe + latest NAV) and api.mfapi.in "
