@@ -593,3 +593,21 @@ def correlation_matrix(named_series: dict, freq: str = "W") -> pd.DataFrame:
     if df.shape[0] < 3 or df.shape[1] < 2:
         return pd.DataFrame()
     return df.corr()
+
+
+def equal_weight_index(named_series: dict) -> pd.Series:
+    """Equal-weight category index (starts at 100) from the mean of daily
+    returns across schemes. Uses whatever schemes have data on each day, so
+    funds with different inception dates all contribute — no single new fund
+    collapses the window the way a common-start rebase would."""
+    rets = {}
+    for n, s in named_series.items():
+        s = _clean(s)
+        if not s.empty:
+            rets[n] = _daily(s).pct_change()
+    if not rets:
+        return pd.Series(dtype=float)
+    avg = pd.DataFrame(rets).mean(axis=1, skipna=True).dropna()
+    if avg.empty:
+        return pd.Series(dtype=float)
+    return 100.0 * (1.0 + avg).cumprod()

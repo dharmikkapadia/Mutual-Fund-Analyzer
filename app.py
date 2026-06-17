@@ -408,6 +408,21 @@ def peer_rolling_band(codes: tuple, win: int) -> pd.DataFrame:
                          "p75": df.quantile(0.75, axis=1)}).dropna()
 
 
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def category_index(codes: tuple) -> pd.Series:
+    """Equal-weight growth-of-100 index across a peer set, cached on the
+    sorted code tuple."""
+    named = {}
+    for c in codes:
+        try:
+            s, _ = get_history(c)
+            if not s.empty:
+                named[c] = s
+        except Exception:  # noqa: BLE001
+            pass
+    return R.equal_weight_index(named)
+
+
 def isin_of(univ: pd.DataFrame, code: int) -> str:
     row = univ[univ["code"] == code]
     isin = row["isin"].iloc[0] if not row.empty else ""
@@ -1325,9 +1340,9 @@ with tabs[7]:
             tv(dfig, 360, legend=True, unified=False, spikes=False)
             chart(dfig)
 
-            # growth-of-₹100 line chart: selected peers + the benchmark,
-            # rebased to a common start (mirrors the Compare tab)
-            section("Performance vs peers & benchmark")
+            # growth-of-₹100 line chart: selected peers + the category
+            # average, rebased to a common start (mirrors the Compare tab)
+            section("Performance vs peers")
             peer_code_of = {f"{r['Scheme']}  ·  [{r['Code']}]": int(r["Code"])
                             for r in peer_rows}
             my_label = next((l for l, c in peer_code_of.items() if c == code),
@@ -1343,9 +1358,10 @@ with tabs[7]:
                 list(peer_code_of.keys()),
                 default=([my_label] if my_label else []) + top_peers,
                 key="peer_plot")
-            inc_bench = st.checkbox(
-                f"Include benchmark — {bench_lbl.split('  ·')[0]}",
-                value=True, key="peer_plot_bench")
+            inc_avg = st.checkbox("Show category average", value=True,
+                                  key="peer_plot_avg",
+                                  help="Equal-weight average of every scheme "
+                                       "in this category.")
             named_p = {}
             for lbl in plot_labels:
                 try:
@@ -1355,28 +1371,30 @@ with tabs[7]:
                             else nm] = s_i
                 except Exception:  # noqa: BLE001
                     st.warning(f"Skipped {lbl.split('  ·')[0]} (fetch failed).")
-            bench_name = "◆ " + bench_lbl.split("  ·")[0]
-            if inc_bench:
-                try:
-                    named_p[bench_name], _ = get_history(bench_opts[bench_lbl])
-                except Exception:  # noqa: BLE001
-                    pass
+            avg_name = "▬ Category average"
+            if inc_avg:
+                cat_idx = category_index(
+                    tuple(sorted(r["Code"] for r in peer_rows)))
+                if not cat_idx.empty:
+                    named_p[avg_name] = cat_idx
             if named_p:
                 reb = R.compare_rebased(named_p)
                 pfig = go.Figure()
                 for i, col in enumerate(reb.columns):
-                    is_b = col == bench_name
+                    is_avg = col == avg_name
                     pfig.add_trace(go.Scatter(
                         x=reb.index, y=reb[col], name=col,
-                        line=dict(color=MUTED if is_b
+                        line=dict(color=MUTED if is_avg
                                   else SERIES[i % len(SERIES)],
-                                  width=1.4, dash="dash" if is_b else "solid"),
+                                  width=2.2 if is_avg else 1.4,
+                                  dash="dash" if is_avg else "solid"),
                         hovertemplate="₹%{y:,.1f}<extra>" + col + "</extra>"))
                 tv(pfig, 420, legend=True)
                 range_buttons(pfig)
                 st.caption("Growth of ₹100 from a common start date. "
-                           "★ = selected scheme · ◆ dashed = benchmark. "
-                           "Hover for values; drag to pan, scroll to zoom.")
+                           "★ = selected scheme · ▬ dashed = category average "
+                           "(equal-weight). Hover for values; drag to pan, "
+                           "scroll to zoom.")
                 chart(pfig)
 
             # risk-vs-return scatter: every peer as a dot (x=vol, y=3Y CAGR)
