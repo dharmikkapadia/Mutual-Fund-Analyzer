@@ -1139,6 +1139,60 @@ with tabs[7]:
             tv(dfig, 360, legend=True, unified=False, spikes=False)
             chart(dfig)
 
+            # growth-of-₹100 line chart: selected peers + the benchmark,
+            # rebased to a common start (mirrors the Compare tab)
+            section("Performance vs peers & benchmark")
+            peer_code_of = {f"{r['Scheme']}  ·  [{r['Code']}]": int(r["Code"])
+                            for r in peer_rows}
+            my_label = next((l for l, c in peer_code_of.items() if c == code),
+                            None)
+            top_peers = [f"{r['Scheme']}  ·  [{r['Code']}]" for r in sorted(
+                peer_rows, key=lambda r: -(r["3Y % pa"]
+                                           if r["3Y % pa"] is not None
+                                           and not pd.isna(r["3Y % pa"])
+                                           else -1e9))
+                if int(r["Code"]) != code][:2]
+            plot_labels = st.multiselect(
+                "Schemes to plot (peers from this category)",
+                list(peer_code_of.keys()),
+                default=([my_label] if my_label else []) + top_peers,
+                key="peer_plot")
+            inc_bench = st.checkbox(
+                f"Include benchmark — {bench_lbl.split('  ·')[0]}",
+                value=True, key="peer_plot_bench")
+            named_p = {}
+            for lbl in plot_labels:
+                try:
+                    s_i, _ = get_history(peer_code_of[lbl])
+                    nm = lbl.split("  ·")[0]
+                    named_p[(nm + " ★") if peer_code_of[lbl] == code
+                            else nm] = s_i
+                except Exception:  # noqa: BLE001
+                    st.warning(f"Skipped {lbl.split('  ·')[0]} (fetch failed).")
+            bench_name = "◆ " + bench_lbl.split("  ·")[0]
+            if inc_bench:
+                try:
+                    named_p[bench_name], _ = get_history(bench_opts[bench_lbl])
+                except Exception:  # noqa: BLE001
+                    pass
+            if named_p:
+                reb = R.compare_rebased(named_p)
+                pfig = go.Figure()
+                for i, col in enumerate(reb.columns):
+                    is_b = col == bench_name
+                    pfig.add_trace(go.Scatter(
+                        x=reb.index, y=reb[col], name=col,
+                        line=dict(color=MUTED if is_b
+                                  else SERIES[i % len(SERIES)],
+                                  width=1.4, dash="dash" if is_b else "solid"),
+                        hovertemplate="₹%{y:,.1f}<extra>" + col + "</extra>"))
+                tv(pfig, 420, legend=True)
+                range_buttons(pfig)
+                st.caption("Growth of ₹100 from a common start date. "
+                           "★ = selected scheme · ◆ dashed = benchmark. "
+                           "Hover for values; drag to pan, scroll to zoom.")
+                chart(pfig)
+
             section("Peer table")
             snapshot_table(
                 sorted(peer_rows,
@@ -1146,6 +1200,31 @@ with tabs[7]:
                                       or pd.isna(r["3Y % pa"]),
                                       -(r["3Y % pa"] or 0))),
                 highlight_code=code)
+
+            # grow the watchlist with same-category peers (flexi with flexi,
+            # small cap with small cap, …)
+            section(f"Add these peers to “{active}”")
+            addable = {f"{r['Scheme']}  ·  [{r['Code']}]": int(r["Code"])
+                       for r in sorted(
+                           peer_rows,
+                           key=lambda r: -(r["3Y % pa"]
+                                           if r["3Y % pa"] is not None
+                                           and not pd.isna(r["3Y % pa"])
+                                           else -1e9))
+                       if int(r["Code"]) not in codes}
+            if addable:
+                to_add = st.multiselect(
+                    f"Same-category schemes not yet in this watchlist "
+                    f"({peer_cat})", list(addable.keys()), key="peer_add")
+                if st.button("Add selected to watchlist", key="peer_add_btn",
+                             type="primary") and to_add:
+                    for lbl in to_add:
+                        store.add(st.session_state.watchlists, active,
+                                  addable[lbl])
+                    st.toast(f"Added {len(to_add)} scheme(s) to “{active}”.")
+                    st.rerun()
+            else:
+                st.caption("Every matching peer is already in this watchlist.")
         elif cached and cached[0] != peer_key:
             st.info("Filters changed — reload peer returns to refresh "
                     "the comparison.")
