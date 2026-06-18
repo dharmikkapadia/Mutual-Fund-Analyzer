@@ -1,37 +1,54 @@
-# AFP NAV Explorer
+# 📈 AFP NAV Explorer
 
-A mutual-fund NAV viewer and returns analyser for the full AMFI universe.
-Streamlit core (the analytics + UI) with a customtkinter launcher so it opens
-like a desktop app inside the AFP suite.
+A mutual-fund NAV viewer and analytics workbench covering the **entire AMFI
+universe** (~10,000+ live Indian mutual-fund schemes). A TradingView-inspired
+Streamlit app for watchlists, deep return & risk analytics, portfolio holdings
+& overlap, and category peer benchmarking — deployable to the cloud or run as a
+desktop app via the bundled customtkinter launcher.
+
+> **Live app:** https://mutual-fund-analyzer-nxp7chbxbewtxwue44pr2x.streamlit.app
+>
+> For information only. Returns are NAV-based and exclude exit loads and taxes —
+> not investment advice. AFP is not SEBI-registered.
 
 ## UI
 Minimal TradingView-inspired design with four **viewing modes** — Midnight
-(true black, default), Slate, Light and Sepia — switchable from the
-sidebar's Appearance section and remembered per browser (localStorage).
-Each mode retokens the whole app: custom CSS, native Streamlit widgets
-(via runtime theme config) and every chart. High-contrast text, crosshair
-hover, right-side axes, 1M/6M/YTD/1Y/3Y/5Y/All range buttons, red/green
-gain-loss semantics. Charts are fully interactive: pan by drag, zoom with
-the scroll wheel, and a minimal modebar (zoom/pan/reset/fullscreen/PNG).
-Subtle motion (fade-up tab transitions, hover lifts on cards/buttons)
-respects `prefers-reduced-motion`. Chart styling is centralised in the
-`tv()` helper in `app.py`; `.streamlit/config.toml` holds the default
-(Midnight) widget theme.
+(true black, default), Slate, Light and Sepia — switchable from the sidebar's
+Appearance section and remembered per browser. Each mode retokens the whole app:
+custom CSS, native Streamlit widgets (via runtime theme config) and every chart.
+High-contrast text, crosshair hover, right-side axes, 1M/6M/YTD/1Y/3Y/5Y/All
+range buttons, and red/green gain-loss semantics. Charts are fully interactive:
+drag to pan, scroll to zoom, a minimal modebar (zoom/pan/reset/fullscreen/PNG),
+and hover tooltips that show both the rebased value and the cumulative % gain.
+Subtle motion (fade-up transitions, hover lifts) respects
+`prefers-reduced-motion`. Chart styling is centralised in the `tv()` helper in
+`app.py`; `.streamlit/config.toml` holds the default (Midnight) widget theme.
 
 ## Data sources
 | Source | Role |
 |---|---|
-| AMFI `NAVAll.txt` | Full scheme universe (code, ISIN, name, category, fund house) + latest NAV. Powers search, the watchlist picker, and the daily NAV. Dead schemes (stale dates) are filtered out. |
-| `api.mfapi.in/mf/{code}` | Full daily NAV history per scheme. Powers every returns calculation. Fetched **on-demand** and cached in-session (mfapi is an unofficial community API, so this keeps requests polite). |
+| AMFI `NAVAll.txt` | Full scheme universe (code, ISIN, name, category, fund house) + latest NAV. Powers search, the watchlist picker and the daily NAV. Dead schemes (stale dates) are filtered out. |
+| `api.mfapi.in/mf/{code}` | Full daily NAV history per scheme — the basis of every returns calculation. Fetched on-demand and cached in-session. |
+| `rupeevest.com` (`get_holding_asset`) | Portfolio holdings, sector splits and fund facts (AUM, managers). Matched to scheme codes via the bundled `rupeevest_codes.csv`. Groww/Kuvera are automatic fallbacks; manual CSV upload is the last resort. |
 
-The two join on AMFI's scheme code.
+## Features
+- **Watchlist dashboard** — sortable grid of every scheme in the active list: 1Y NAV sparkline, latest NAV, 1D/1Y/3Y/5Y returns and max drawdown, red/green coded.
+- **Overview** — trailing returns (1M–since inception), calendar-year bars, month-on-month heatmap, drawdown curve, and the deepest-drawdowns table with recovery time.
+- **Risk ratios** — Sharpe, Sortino and annualised standard deviation over a selectable 1Y/3Y/5Y/All window with a configurable risk-free rate, plus **beta, Jensen's alpha, R² and up/down capture ratios** against a user-pickable index fund.
+- **Plan comparison** — Direct vs Regular CAGR gap for the same scheme (the expense-ratio drag), when both plans are in the universe.
+- **Point-to-point returns** — custom dates, financial-year (Apr–Mar) table, month-on-month table. Absolute always; CAGR when the span exceeds 1Y.
+- **Rolling returns** — 1/3/5Y daily-rolling, annualised, with distribution stats and a histogram, plus **rolling beta/alpha** vs the chosen benchmark.
+- **SIP / XIRR & goal planner** — money-weighted SIP return vs lumpsum CAGR, and the required monthly SIP to hit a target corpus from the fund's own rolling-return distribution (pessimistic/median/optimistic) with a projected-corpus fan chart.
+- **Compare** — any number of schemes overlaid as growth-of-₹100 from a common start, plus a trailing-return comparison table.
+- **Holdings & overlap** — portfolio holdings, sectors and fund facts from Rupeevest's API; select multiple schemes for an **overlap matrix** (sum of min weights), a combined holdings table with common positions highlighted and unique counts, and a grouped **sector-allocation** comparison. See `holdings.py`.
+- **Category peers** — benchmark a scheme against its full AMFI category (e.g. small-cap vs every small-cap): rank & percentile per horizon, a box-plot distribution, a growth-of-₹100 chart overlaying chosen peers and an equal-weight **category-average** line, a **risk-vs-return scatter** (volatility vs 3Y CAGR with median crosshairs), a **3Y rolling-return consistency band** (the fund vs the peer 25–75% range), a sortable peer table, and one-click adding of same-category peers to the watchlist.
+- **Portfolio** — treat the watchlist as one weighted portfolio: blended growth-of-₹100, blended CAGR/volatility/max-drawdown/Sharpe, and a weekly-return correlation matrix for diversification.
+- **Watchlists** — multiple named lists, persisted in the **browser** (localStorage) so they survive cloud restarts and stay per-visitor; `~/.afp_nav_explorer/watchlists.json` is the desktop fallback / migration source.
 
-## Setup (Windows, Microsoft Store Python 3.14)
+## Run
 ```
 python -m pip install -r requirements.txt
 ```
-
-## Run
 Desktop launcher (recommended):
 ```
 python launcher.py
@@ -40,49 +57,30 @@ Or run Streamlit directly:
 ```
 python -m streamlit run app.py
 ```
-The launcher starts Streamlit headless via `python -m streamlit` (the reliable
-invocation when the Scripts dir isn't on PATH) and opens the browser.
 
 ## Deploy (Streamlit Community Cloud)
 Point [share.streamlit.io](https://share.streamlit.io) at this repo with
-`app.py` as the main file — no other config needed. Watchlists are stored in
-each visitor's browser via localStorage (the ephemeral, shared server
-filesystem is automatically disabled there; set `AFP_BROWSER_ONLY=1` to force
-the same on other hosts). `AFP_NO_BROWSER_STORE=1` disables the browser sync
-entirely (used by headless tests).
+`app.py` as the main file — no other config needed. On the cloud, watchlists are
+stored in each visitor's browser via localStorage (the ephemeral, shared server
+filesystem is auto-disabled; `AFP_BROWSER_ONLY=1` forces this on other hosts,
+`AFP_NO_BROWSER_STORE=1` disables the browser sync for headless tests).
 
-## Features (v1)
-- **Watchlist dashboard** — sortable grid of every scheme in the active list: 1Y NAV sparkline, latest NAV, 1D/1Y/3Y/5Y returns and max drawdown, red/green coded.
-- **Risk ratios** — Sharpe, Sortino and annualised standard deviation over a selectable 1Y/3Y/5Y/All window with a configurable risk-free rate, plus **beta, Jensen's alpha, R² and up/down capture ratios** against a user-pickable index fund (the AMFI universe's index funds act as the market proxy).
-- **Drawdown analysis** — the five deepest peak-to-trough falls with trough/recovery dates and days underwater (recovery time, not just depth).
-- **Plan comparison** — Direct vs Regular CAGR gap for the same scheme (the expense-ratio drag), when both plans are in the universe.
-- **Goal planner** — required monthly SIP to hit a target corpus, derived from the fund's own historical rolling-return distribution (pessimistic/median/optimistic), with a projected-corpus fan chart.
-- **Portfolio** — treat the watchlist as one weighted portfolio: blended growth-of-₹100, blended CAGR/volatility/max-drawdown/Sharpe, and a weekly-return correlation matrix for diversification.
-- **Holdings & overlap** — portfolio holdings via public Groww/Kuvera JSON endpoints (matched by ISIN; Rupeevest is linked per scheme since it has no public API), with fund facts (AUM, expense ratio, fund managers). Select multiple schemes for an **overlap matrix** (sum of min weights) and a combined holdings table with common positions highlighted and unique counts. Manual CSV upload as a fallback. See `holdings.py`.
-- **Fund facts & links** — fund size, expense ratio and manager names on the Overview, plus Rupeevest / factsheet / ValueResearch links per scheme.
-- **Sector allocation compare** — grouped sector-weight bars across selected schemes on the Holdings tab (when the provider supplies sector data).
-- **Rolling beta/alpha** — 1/3/5Y rolling beta and Jensen's alpha vs the chosen benchmark on the Rolling tab, showing how a fund's behaviour and edge drift over time.
-- **Category peers** — benchmark a scheme against its full AMFI category universe (e.g. a small-cap fund vs every other small-cap fund): rank and percentile per horizon, box-plot distribution with the scheme marked, a growth-of-₹100 line chart overlaying chosen peers and the benchmark, a **risk-vs-return scatter** (every peer plotted by volatility and 3Y CAGR with category-median crosshairs), a **3Y rolling-return consistency band** (the fund vs the peer 25–75% range over time), a sortable peer table, and one-click adding of same-category peers to the watchlist. Growth-only and Direct/Regular plan filters keep the peer set honest; histories are fetched once on demand and cached.
-- **Watchlists** — multiple named lists, persisted in the **browser** (localStorage) so they survive cloud restarts and stay per-visitor; `~/.afp_nav_explorer/watchlists.json` remains as the desktop fallback / migration source.
-- **Point-to-point returns** — custom dates, financial-year (Apr–Mar) table, month-on-month table. Absolute always; CAGR shown when the span exceeds 1Y.
-- **Rolling returns** — 1/3/5Y daily-rolling, annualised, with distribution stats (min/max/median/avg, % negative, % above a hurdle, IQR) plus a histogram.
-- **Comparison** — any number of schemes overlaid as growth-of-₹100 from a common start (no min/max scaling rules), plus a trailing-return comparison table.
-- **Overview** — trailing block (1M–since inception), calendar-year bar, MoM heatmap, drawdown curve, max drawdown, annualised volatility.
-- **SIP / XIRR** — monthly SIP money-weighted return alongside lumpsum CAGR.
-
-## File map
-- `returns.py` — pure pandas/numpy analytics engine (unit-tested in `test_engine.py`).
+## Project layout
+- `app.py` — Streamlit UI (themes, charts, all tabs).
+- `returns.py` — pure pandas/numpy analytics engine (returns, risk ratios, capture, drawdowns, SIP/goal, blend, correlation) — no network or UI, fully unit-testable.
 - `nav_data.py` — AMFI parsing + mfapi history fetch.
-- `store.py` — watchlist persistence.
-- `app.py` — Streamlit UI.
+- `holdings.py` — Rupeevest/Groww/Kuvera holdings fetch + overlap analytics.
+- `store.py` — watchlist persistence (browser localStorage primary, JSON file fallback).
 - `launcher.py` — customtkinter desktop launcher.
-- `.streamlit/config.toml` — dark theme tokens for native Streamlit widgets.
+- `rupeevest_codes.csv` — bundled AMFI → Rupeevest scheme-code map.
+- `.streamlit/config.toml` — default (Midnight) widget theme.
+- `.claude/hooks/session-start.sh` — installs dependencies for Claude Code on the web sessions.
 
-## Roadmap (phase 2, scoped but not built)
-- Benchmark-relative metrics vs an index: alpha/beta, up/down capture (needs an index TRI series).
-- AUM and expense ratio (AMFI monthly disclosure / other source).
-- Correlation matrix and a weighted blended-portfolio simulator.
-- Alerts (NAV move %, 52-wk high/low, drawdown breach) and AFP-branded Excel/PDF export.
+## Roadmap
+- **Cross-device watchlist sync** — a cloud store + login so lists auto-load on any device (currently per-browser via localStorage).
+- Branded **Excel / PDF export** of a scheme or watchlist.
+- **Alerts** — NAV move %, 52-week high/low, drawdown breach.
+- A benchmark **TRI series** for true index-relative metrics.
 
 ## Notes
 Returns are NAV-based and exclude exit loads and taxes. For information only —
