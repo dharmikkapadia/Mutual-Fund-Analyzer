@@ -300,6 +300,60 @@ st.markdown(f"""
     [data-testid="stExpander"]:hover {{border-color: {ACCENT};}}
     a {{transition: color .15s ease;}}
   }}
+
+  /* ===================================================================== *
+   * Responsive layout — the app is built for wide desktop (fixed-ratio
+   * st.columns, a 1240px container). These breakpoints let the same page
+   * reflow for tablet and phone browsers without touching the Python layout.
+   * ===================================================================== */
+
+  /* Tablet / small laptop: drop the fixed cap, tighten the gutters. */
+  @media (max-width: 1100px) {{
+    .block-container {{max-width: 100%; padding-left: 1.4rem;
+      padding-right: 1.4rem;}}
+  }}
+
+  /* Phone: let column rows wrap, stack tall content, scroll the tab bar. */
+  @media (max-width: 640px) {{
+    .block-container {{padding: 1rem .7rem 1.6rem;}}
+    .scheme-title {{font-size: 1.15rem;}}
+    .scheme-sub {{font-size: .72rem;}}
+    h1 {{font-size: 1.4rem;}} h2 {{font-size: 1.2rem;}}
+    h3 {{font-size: 1.05rem;}}
+
+    /* Columns are laid out as a flex row; allow them to wrap and, by
+       default, stack each child to full width so charts/tables stay legible. */
+    [data-testid="stHorizontalBlock"] {{flex-wrap: wrap; gap: .5rem !important;}}
+    [data-testid="stColumn"] {{min-width: 100% !important;
+      flex-basis: 100% !important;}}
+
+    /* Metric tiles read fine two-up, so a 5-metric header becomes a compact
+       grid instead of five full-width rows. (:has scopes this to metric cols.) */
+    [data-testid="stColumn"]:has([data-testid="stMetric"]) {{
+      min-width: calc(50% - .25rem) !important;
+      flex-basis: calc(50% - .25rem) !important;}}
+    [data-testid="stMetric"] {{padding: .6rem .7rem;}}
+    [data-testid="stMetricValue"] {{font-size: 1.05rem;}}
+
+    /* Tab strip: scroll horizontally rather than wrapping into a tall block. */
+    .stTabs [data-baseweb="tab-list"] {{overflow-x: auto; flex-wrap: nowrap;
+      -webkit-overflow-scrolling: touch; scrollbar-width: none;}}
+    .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {{display: none;}}
+    .stTabs [data-baseweb="tab"] {{white-space: nowrap; flex: 0 0 auto;}}
+
+    /* Sidebar opens as an overlay on phones — cap it so it never hides the
+       whole page and keep its controls full-width. */
+    [data-testid="stSidebar"] {{min-width: 0 !important; width: 86vw !important;}}
+    [data-testid="stSidebar"] [data-testid="stColumn"] {{
+      min-width: calc(50% - .25rem) !important;
+      flex-basis: calc(50% - .25rem) !important;}}
+  }}
+
+  /* Very narrow phones: even the metric tiles go full width. */
+  @media (max-width: 380px) {{
+    [data-testid="stColumn"]:has([data-testid="stMetric"]) {{
+      min-width: 100% !important; flex-basis: 100% !important;}}
+  }}
 </style>""", unsafe_allow_html=True)
 
 
