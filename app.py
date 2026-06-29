@@ -21,6 +21,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_js_eval import streamlit_js_eval
 
+import cloud_sync
 import holdings as H
 import nav_data as D
 import returns as R
@@ -520,6 +521,50 @@ with st.sidebar:
                               st.session_state.active_list)
             st.session_state.active_list = next(iter(st.session_state.watchlists))
             st.rerun()
+
+    if cloud_sync.is_configured():
+        with st.expander("☁️ Cloud sync (access anywhere)"):
+            st.caption(
+                "Encrypt your watchlists with a passphrase and sync them to a "
+                "private store, so you can load them on any device. The "
+                "passphrase never leaves this app and is **not recoverable** — "
+                "if you lose it, the data is gone."
+            )
+            cu = st.text_input("Username", key="sync_user",
+                               placeholder="e.g. ravi.k")
+            cp = st.text_input("Passphrase", key="sync_pass", type="password",
+                               placeholder="a long, memorable phrase")
+            sc1, sc2 = st.columns(2)
+            if sc1.button("Load", width="stretch", key="sync_load"):
+                if not cu or not cp:
+                    st.warning("Enter a username and passphrase.")
+                else:
+                    try:
+                        data = cloud_sync.pull(cu, cp)
+                        if data is None:
+                            st.info("No saved watchlist found for that "
+                                    "username yet — use Save to create one.")
+                        else:
+                            st.session_state.watchlists = data
+                            st.session_state.active_list = next(iter(data))
+                            st.success("Watchlist loaded.")
+                            st.rerun()
+                    except cloud_sync.InvalidToken:
+                        st.error("Wrong passphrase for that username.")
+                    except Exception as e:  # noqa: BLE001
+                        st.error(f"Could not load: {e}")
+            if sc2.button("Save", width="stretch", key="sync_save",
+                          type="primary"):
+                if not cu or not cp:
+                    st.warning("Enter a username and passphrase.")
+                else:
+                    try:
+                        cloud_sync.push(cu, cp, st.session_state.watchlists)
+                        st.success("Watchlist saved to the cloud.")
+                    except PermissionError as e:
+                        st.error(str(e))
+                    except Exception as e:  # noqa: BLE001
+                        st.error(f"Could not save: {e}")
 
     section("Add schemes")
     fh = st.selectbox("Fund house", [""] + sorted(universe["fund_house"]

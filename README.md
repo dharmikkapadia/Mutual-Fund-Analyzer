@@ -71,13 +71,38 @@ filesystem is auto-disabled; `AFP_BROWSER_ONLY=1` forces this on other hosts,
 - `nav_data.py` — AMFI parsing + mfapi history fetch.
 - `holdings.py` — Rupeevest/Groww/Kuvera holdings fetch + overlap analytics.
 - `store.py` — watchlist persistence (browser localStorage primary, JSON file fallback).
+- `cloud_sync.py` — optional encrypted, cross-device watchlist sync (see below).
 - `launcher.py` — customtkinter desktop launcher.
 - `rupeevest_codes.csv` — bundled AMFI → Rupeevest scheme-code map.
 - `.streamlit/config.toml` — default (Midnight) widget theme.
 - `.claude/hooks/session-start.sh` — installs dependencies for Claude Code on the web sessions.
 
+## Cross-device watchlist sync (optional, encrypted)
+This repo is safe to make **public**. User watchlists are never stored in clear
+text. When enabled, the app encrypts each user's watchlist *in the browser/app*
+with their passphrase (Argon2id key derivation + Fernet/AES) and stores only the
+ciphertext in a **separate private** GitHub repo that acts as the datastore.
+
+How it works:
+- A user picks a **username** (locates their record) and a **passphrase**
+  (decrypts it). The blob is stored at `watchlists/<sha256(username)>.json`, so
+  the store never reveals who a user is.
+- Reading needs the GitHub token only because the store repo is private; the
+  passphrase never leaves the app and is **not recoverable** if lost.
+- Saving to an existing username requires proving you know its passphrase, so
+  one user cannot overwrite another's data.
+
+Setup:
+1. Create a **private** GitHub repo (e.g. `you/mfa-watchlists-private`).
+2. Create a fine-grained PAT scoped to that repo with **Contents: read & write**.
+3. Copy `.streamlit/secrets.toml.example` → `.streamlit/secrets.toml` (gitignored)
+   and fill in `token`, `repo`, `branch`. On Streamlit Cloud, paste the same
+   under **App → Settings → Secrets**.
+
+Without secrets configured, the sync UI is hidden and the app behaves exactly as
+before (per-browser localStorage only).
+
 ## Roadmap
-- **Cross-device watchlist sync** — a cloud store + login so lists auto-load on any device (currently per-browser via localStorage).
 - Branded **Excel / PDF export** of a scheme or watchlist.
 - **Alerts** — NAV move %, 52-week high/low, drawdown breach.
 - A benchmark **TRI series** for true index-relative metrics.
