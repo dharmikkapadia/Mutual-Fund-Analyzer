@@ -53,6 +53,12 @@ PLOTLY_CONFIG = {
     "modeBarButtonsToRemove": ["select2d", "lasso2d", "autoScale2d",
                                "zoomIn2d", "zoomOut2d"],
 }
+# The NAV chart keeps the box-select tool so users can re-arm drag-to-measure
+# after switching to pan (see the Overview tab).
+NAV_CONFIG = {**PLOTLY_CONFIG,
+              "modeBarButtonsToRemove":
+                  [b for b in PLOTLY_CONFIG["modeBarButtonsToRemove"]
+                   if b != "select2d"]}
 
 
 def rgba(hex_color: str, alpha: float) -> str:
@@ -351,6 +357,67 @@ def range_buttons(fig: go.Figure) -> go.Figure:
 
 def chart(fig: go.Figure) -> None:
     st.plotly_chart(fig, width="stretch", config=PLOTLY_CONFIG)
+
+
+# --------------------------------------------------------------------------- #
+# Drag-to-select a return window (Google-Finance style) on a NAV chart
+# --------------------------------------------------------------------------- #
+def selected_span(series: pd.Series, sel) -> tuple | None:
+    """Two real NAV dates bounding a Plotly box selection, or None.
+
+    `sel` is what ``st.plotly_chart(..., on_select="rerun", key=…)`` stores in
+    session_state; ``selection.box[0].x`` holds the dragged [start, end] range.
+    The bounds are clamped to the loaded history and snapped to actual NAV
+    dates, so the endpoint markers land exactly on the line."""
+    try:
+        xs = sel["selection"]["box"][0]["x"]
+        a, b = pd.Timestamp(xs[0]), pd.Timestamp(xs[1])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+    lo, hi = (a, b) if a <= b else (b, a)
+    lo = lo.tz_localize(None) if lo.tzinfo else lo
+    hi = hi.tz_localize(None) if hi.tzinfo else hi
+    lo, hi = max(lo, series.index.min()), min(hi, series.index.max())
+    if lo >= hi:
+        return None
+    seg = series.loc[lo:hi]
+    return (seg.index[0], seg.index[-1]) if len(seg) >= 2 else None
+
+
+def mark_span(fig: go.Figure, series: pd.Series, span: tuple) -> None:
+    """Shade the selected period, drop endpoint dots on the line and badge the
+    absolute return — the visual half of the drag-to-select feature."""
+    d0, d1 = span
+    n0, n1 = float(series.loc[d0]), float(series.loc[d1])
+    col = UP if n1 >= n0 else DOWN
+    fig.add_vrect(x0=d0, x1=d1, line_width=0, layer="below",
+                  fillcolor=rgba(col, 0.10))
+    fig.add_trace(go.Scatter(
+        x=[d0, d1], y=[n0, n1], mode="markers", showlegend=False,
+        marker=dict(color=col, size=9, line=dict(color=BG, width=1.5)),
+        hoverinfo="skip"))
+    fig.add_annotation(
+        x=d1, y=1, xref="x", yref="paper", xanchor="right", yanchor="top",
+        text=f"<b>{(n1 / n0 - 1.0) * 100:+.2f}%</b>", showarrow=False,
+        font=dict(color=on_color(col), size=12), bgcolor=col, borderpad=4)
+
+
+def span_readout(series: pd.Series, span: tuple) -> None:
+    """Metric strip describing the drag-selected window (period, NAV move,
+    absolute return and — for spans over a year — annualised CAGR)."""
+    d0, d1 = span
+    p = R.point_to_point(series, d0, d1)
+    days = (d1 - d0).days
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Selected period", f"{days:,} days",
+              help=f"{d0.date()} → {d1.date()}")
+    c2.metric("NAV", f"₹{p['nav2']:,.2f}", f"{p['abs'] * 100:+.2f}%",
+              help=f"₹{p['nav1']:,.2f} on {d0.date()} → "
+                   f"₹{p['nav2']:,.2f} on {d1.date()}")
+    cagr = p["cagr"]
+    c3.metric("Annualised (CAGR)",
+              pct(cagr * 100) if cagr is not None else "—",
+              help="Compound annual growth — shown only for spans over 1 year.")
 
 
 def section(label: str) -> None:
@@ -726,6 +793,11 @@ with tabs[1]:
     with left:
         section("NAV history")
         log_scale = st.toggle("Log scale", value=False)
+
+        # Drag-selection is stored under the widget key; read it before drawing
+        # so the highlight + return render on the same pass (on_select reruns).
+        span = selected_span(series, st.session_state.get("nav_sel"))
+
         fig = go.Figure(go.Scatter(
             x=series.index, y=series.values, name="NAV",
             line=dict(color=ACCENT, width=1.5),
@@ -735,7 +807,27 @@ with tabs[1]:
         range_buttons(fig)
         if log_scale:
             fig.update_yaxes(type="log")
-        chart(fig)
+        # Press-and-drag horizontally to sweep out a return window (like Google
+        # Finance) rather than pan; the box is locked to the time axis. A dotted
+        # guide follows the cursor while dragging; once released, Plotly's own
+        # selection rectangle is hidden (activeselection transparent) so only
+        # the shaded band, endpoint dots and % badge drawn by mark_span show.
+        fig.update_layout(
+            dragmode="select", selectdirection="h",
+            newselection=dict(line=dict(color=ACCENT, width=1, dash="dot")),
+            activeselection=dict(fillcolor="rgba(0,0,0,0)", opacity=0))
+        if span:
+            mark_span(fig, series, span)
+        st.plotly_chart(fig, width="stretch", key="nav_sel",
+                        on_select="rerun", selection_mode="box",
+                        config=NAV_CONFIG)
+        if span:
+            span_readout(series, span)
+            st.caption("Drag across the chart to measure the return over any "
+                       "period. Single- or double-click to clear.")
+        else:
+            st.caption("Tip: drag across the chart to select a date range and "
+                       "see its return — Google-Finance style.")
 
         section("Drawdown")
         dd = R.drawdown(series)

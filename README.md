@@ -18,8 +18,11 @@ Appearance section and remembered per browser. Each mode retokens the whole app:
 custom CSS, native Streamlit widgets (via runtime theme config) and every chart.
 High-contrast text, crosshair hover, right-side axes, 1M/6M/YTD/1Y/3Y/5Y/All
 range buttons, and red/green gain-loss semantics. Charts are fully interactive:
-drag to pan, scroll to zoom, a minimal modebar (zoom/pan/reset/fullscreen/PNG),
-and hover tooltips that show both the rebased value and the cumulative % gain.
+scroll to zoom, a minimal modebar (zoom/pan/reset/fullscreen/PNG), and hover
+tooltips that show both the rebased value and the cumulative % gain. The NAV
+history chart adds a Google-Finance-style **drag-to-select**: sweep across any
+date range to read back its absolute return, annualised CAGR and the NAV move,
+with the period shaded and its endpoints marked.
 Subtle motion (fade-up transitions, hover lifts) respects
 `prefers-reduced-motion`. Chart styling is centralised in the `tv()` helper in
 `app.py`; `.streamlit/config.toml` holds the default (Midnight) widget theme.
@@ -33,7 +36,7 @@ Subtle motion (fade-up transitions, hover lifts) respects
 
 ## Features
 - **Watchlist dashboard** — sortable grid of every scheme in the active list: 1Y NAV sparkline, latest NAV, 1D/1Y/3Y/5Y returns and max drawdown, red/green coded.
-- **Overview** — trailing returns (1M–since inception), calendar-year bars, month-on-month heatmap, drawdown curve, and the deepest-drawdowns table with recovery time.
+- **Overview** — trailing returns (1M–since inception), a NAV-history chart with **drag-to-select return measurement** (sweep any window for its absolute/annualised return), calendar-year bars, month-on-month heatmap, drawdown curve, and the deepest-drawdowns table with recovery time.
 - **Risk ratios** — Sharpe, Sortino and annualised standard deviation over a selectable 1Y/3Y/5Y/All window with a configurable risk-free rate, plus **beta, Jensen's alpha, R² and up/down capture ratios** against a user-pickable index fund.
 - **Plan comparison** — Direct vs Regular CAGR gap for the same scheme (the expense-ratio drag), when both plans are in the universe.
 - **Point-to-point returns** — custom dates, financial-year (Apr–Mar) table, month-on-month table. Absolute always; CAGR when the span exceeds 1Y.
