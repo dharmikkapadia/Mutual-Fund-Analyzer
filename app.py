@@ -807,11 +807,15 @@ with tabs[1]:
         range_buttons(fig)
         if log_scale:
             fig.update_yaxes(type="log")
-        # Drag horizontally to select a return window (like Google Finance)
-        # rather than pan; the box is locked to the time axis.
+        # Press-and-drag horizontally to sweep out a return window (like Google
+        # Finance) rather than pan; the box is locked to the time axis. A dotted
+        # guide follows the cursor while dragging; once released, Plotly's own
+        # selection rectangle is hidden (activeselection transparent) so only
+        # the shaded band, endpoint dots and % badge drawn by mark_span show.
         fig.update_layout(
             dragmode="select", selectdirection="h",
-            newselection=dict(line=dict(color=ACCENT, width=1, dash="dot")))
+            newselection=dict(line=dict(color=ACCENT, width=1, dash="dot")),
+            activeselection=dict(fillcolor="rgba(0,0,0,0)", opacity=0))
         if span:
             mark_span(fig, series, span)
         st.plotly_chart(fig, width="stretch", key="nav_sel",
