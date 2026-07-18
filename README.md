@@ -33,7 +33,7 @@ Subtle motion (fade-up transitions, hover lifts) respects
 | AMFI `NAVAll.txt` | Full scheme universe (code, ISIN, name, category, fund house) + latest NAV. Powers search, the watchlist picker and the daily NAV. Dead schemes (stale dates) are filtered out. |
 | `api.mfapi.in/mf/{code}` | Full daily NAV history per scheme — the basis of every returns calculation. Fetched on-demand and cached in-session. |
 | `rupeevest.com` (`get_holding_asset`) | Portfolio holdings, sector splits and fund facts (AUM, managers). Matched to scheme codes via the bundled `rupeevest_codes.csv`. Groww/Kuvera are automatic fallbacks; manual CSV upload is the last resort. |
-| `valueresearchonline.com` (login required) | Fund-level portfolio parameters for the **PF Review** tab: P/B, P/E, AUM, large/mid/small-cap split, debt & cash and sector allocation. Fetched with the *user's own* VR account (credentials held in session memory only); every fetched number lands in an editable grid, so the tab also works fully manually. See `vr_data.py`. |
+| `valueresearchonline.com` (login required) | Fund-level portfolio parameters for the **PF Review** tab: P/B, P/E, AUM, large/mid/small-cap split, debt & cash and sector allocation. Primary source is the fund's portfolio JSON endpoint (`/api/funds/{id}/portfolio/` — the fund page itself is an AJAX-filled skeleton), with page-HTML parsing as fallback. Fetched with the *user's own* VR account (credentials held in session memory only); every fetched number lands in an editable grid, so the tab also works fully manually. See `vr_data.py`. |
 
 ## Features
 - **Watchlist dashboard** — sortable grid of every scheme in the active list: 1Y NAV sparkline, latest NAV, 1D/1Y/3Y/5Y returns and max drawdown, red/green coded.

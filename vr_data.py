@@ -42,6 +42,9 @@ except ImportError:  # pragma: no cover
     BeautifulSoup = None
 
 VR_BASE = "https://www.valueresearchonline.com"
+# fund-specific portfolio JSON (confirmed live July 2026) — the fund page
+# itself is only a skeleton that this endpoint fills in via AJAX
+VR_API_PORTFOLIO = VR_BASE + "/api/funds/{id}/portfolio/"
 VR_LOGIN_PATHS = ("/login/", "/accounts/login/", "/membership/login/")
 # autocomplete endpoints seen on VR over time; tried in order
 VR_SEARCH_PATHS = (
@@ -258,18 +261,45 @@ class VRSession:
                 return out
         return []
 
+    def fetch_portfolio_json(self, fund_id: str, referer: str | None = None):
+        """Raw JSON from the fund's portfolio API, or None on any failure."""
+        try:
+            time.sleep(REQUEST_DELAY)
+            r = self.s.get(VR_API_PORTFOLIO.format(id=fund_id),
+                           timeout=TIMEOUT,
+                           headers={"Accept": "application/json, */*",
+                                    "Referer": referer or VR_BASE + "/",
+                                    "X-Requested-With": "XMLHttpRequest"})
+            if r.ok and "json" in (r.headers.get("content-type") or ""):
+                return r.json()
+        except (requests.RequestException, ValueError):
+            pass
+        return None
+
     def fetch_fund(self, fund_ref: str) -> dict:
-        """Canonical parameter dict for a fund page URL or numeric VR id."""
+        """Canonical parameter dict for a fund page URL or numeric VR id.
+
+        The portfolio API endpoint is the primary source (the fund page is
+        an AJAX-filled skeleton); the page HTML is fetched only to fill
+        fields the API parse missed.
+        """
         url = fund_url(fund_ref)
-        time.sleep(REQUEST_DELAY)
-        r = self.get(url)
-        html = r.text
-        if _is_login_wall(html):
-            raise VRError("VR served the login wall for this page — the "
-                          "session isn't (or is no longer) logged in.")
-        params = parse_fund_page(html)
-        params["url"] = r.url or url
-        return params
+        fid = _fund_id(url)
+        api_p = None
+        if fid:
+            js = self.fetch_portfolio_json(fid, referer=url)
+            if js is not None:
+                api_p = parse_portfolio_api(js)
+        page_p = None
+        if _needs_page(api_p):
+            time.sleep(REQUEST_DELAY)
+            r = self.get(url)
+            if api_p is None and _is_login_wall(r.text):
+                raise VRError("VR served the login wall for this page — the "
+                              "session isn't (or is no longer) logged in.")
+            page_p = parse_fund_page(r.text)
+            page_p["url"] = r.url or url
+        return _merge_params(api_p, page_p, url)
 
 
 def fund_url(fund_ref: str) -> str:
@@ -601,6 +631,19 @@ def parse_fund_page(html: str) -> dict:
             elif norm in ("others", "other") and label.strip() not in extra:
                 extra[label.strip()] = value
 
+    _apply_allocations(params, caps, equity, debt, cash, sectors, extra)
+
+    params["as_of"] = _scoped_as_of(soup)
+    if params["as_of"] is None:
+        m = re.search(r"as\s+on\s+([0-9]{1,2}[-/ ][A-Za-z0-9]{2,9}[-/ ]"
+                      r"[0-9]{2,4})", soup.get_text(" ", strip=True), re.I)
+        params["as_of"] = m.group(1) if m else None
+    return params
+
+
+def _apply_allocations(params: dict, caps: dict, equity, debt, cash,
+                       sectors: dict, extra: dict) -> None:
+    """Shared finalisation for both the HTML and the JSON parse paths."""
     # 5-bucket (giant..tiny) collapses into the sheet's 3 buckets; a bucket
     # missing while others parsed means it genuinely holds 0%
     if caps:
@@ -615,16 +658,206 @@ def parse_fund_page(html: str) -> dict:
         params["debt_cash"] = round(100.0 - equity, 4)
     elif debt is not None or cash is not None:
         params["debt_cash"] = round((debt or 0.0) + (cash or 0.0), 4)
-
     params["sectors"] = {k: round(v, 4) for k, v in sectors.items()}
     params["extra_sectors"] = {k: round(v, 4) for k, v in extra.items()}
 
-    params["as_of"] = _scoped_as_of(soup)
-    if params["as_of"] is None:
-        m = re.search(r"as\s+on\s+([0-9]{1,2}[-/ ][A-Za-z0-9]{2,9}[-/ ]"
-                      r"[0-9]{2,4})", soup.get_text(" ", strip=True), re.I)
-        params["as_of"] = m.group(1) if m else None
+
+# --------------------------------------------------------------------------- #
+# Portfolio API JSON parsing (pure — testable offline against saved JSON)
+# --------------------------------------------------------------------------- #
+_HOLDING_KEYS = {"company", "company_name", "compname", "stock", "stock_name",
+                 "isin", "holding_name", "market_value", "no_of_shares"}
+_LABEL_FIELDS = ("name", "label", "title", "sector_name", "sector",
+                 "asset_type", "type", "category", "x")
+_VALUE_FIELDS = ("value", "y", "percentage", "percent", "pct", "weight",
+                 "allocation", "corpus_per", "holding")
+_ASSET_LABELS = {"equity", "debt", "cash", "cash & cash eq", "real estate",
+                 "others", "other"}
+
+
+def _key_norm(k) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(k).lower()).strip("_")
+
+
+def _json_lists(obj):
+    """Every list-of-dicts anywhere in the tree."""
+    if isinstance(obj, list):
+        if obj and all(isinstance(i, dict) for i in obj):
+            yield obj
+        for v in obj:
+            yield from _json_lists(v)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _json_lists(v)
+
+
+def _list_pairs(lst: list) -> list[tuple[str, float]]:
+    """(label, value) pairs from a list of dicts, or [] if it doesn't have
+    a consistent label+value shape (or looks like a holdings list)."""
+    for item in lst:
+        if _HOLDING_KEYS & {_key_norm(k) for k in item}:
+            return []
+    lf = next((f for f in _LABEL_FIELDS
+               if sum(isinstance(i.get(f), str) and i.get(f).strip() != ""
+                      for i in lst) >= max(1, len(lst) - 1)), None)
+    vf = next((f for f in _VALUE_FIELDS
+               if sum(_to_float(i.get(f)) is not None for i in lst)
+               >= max(1, len(lst) - 1)), None)
+    if lf is None or vf is None:
+        return []
+    out = []
+    for i in lst:
+        v = _to_float(i.get(vf))
+        if isinstance(i.get(lf), str) and v is not None and 0 <= v <= 100:
+            out.append((i[lf].strip(), v))
+    return out
+
+
+def _is_asset_label(norm: str) -> bool:
+    return norm in _ASSET_LABELS or norm.startswith("cash")
+
+
+def _classify_pairs(pairs) -> tuple[str, dict, dict]:
+    """('sectors'|'caps'|'assets'|'', mapped, extra) for a pair group.
+
+    The group's kind is decided by majority vote first, then every label
+    is mapped under that kind's vocabulary — so 'Real Estate' counts as a
+    sector inside a sector list but as an asset bucket inside the asset
+    list, and one ambiguous label can't flip a whole group.
+    """
+    votes = {"sectors": 0, "caps": 0, "assets": 0}
+    for label, _ in pairs:
+        norm = _norm_label(label)
+        if _norm_cap_label(norm) is not None:
+            votes["caps"] += 1
+        elif _is_asset_label(norm):
+            votes["assets"] += 1
+        elif norm in _SECTOR_LOOKUP:
+            votes["sectors"] += 1
+    kind = max(votes, key=votes.get)          # ties favour 'sectors'
+    if votes[kind] < 2:
+        return "", {}, {}
+    mapped, extra = {}, {}
+    for label, value in pairs:
+        norm = _norm_label(label)
+        if kind == "caps":
+            cap = _norm_cap_label(norm)
+            if cap is not None:
+                mapped.setdefault(cap, value)
+            else:
+                extra.setdefault(label, value)
+        elif kind == "assets":
+            if _is_asset_label(norm):
+                mapped.setdefault(norm, value)
+            else:
+                extra.setdefault(label, value)
+        else:
+            canonical = _SECTOR_LOOKUP.get(norm)
+            if canonical is not None:
+                mapped[canonical] = mapped.get(canonical, 0.0) + value
+            else:
+                extra.setdefault(label, value)
+    return kind, mapped, extra
+
+
+def parse_portfolio_api(js) -> dict:
+    """Canonical parameter dict from /api/funds/{id}/portfolio/ JSON.
+
+    The exact schema isn't documented, so extraction is shape-driven:
+    scalar stats come from fuzzy key matches (portfolio-prefixed keys win),
+    allocations from any list-of-dicts / plain dict whose labels match the
+    known cap-bucket, asset-bucket or sector vocabularies. Holdings lists
+    (anything carrying company/ISIN fields) are excluded so stock-level
+    figures can't pollute fund-level ones.
+    """
+    params = blank_params()
+
+    # scalar stats — prefer explicitly portfolio-scoped keys
+    for want_portfolio in (True, False):
+        for d in _walk_dicts(js):
+            for k, v in d.items():
+                key = _key_norm(k)
+                if want_portfolio and "portfolio" not in key:
+                    continue
+                fv = _to_float(v)
+                if fv is not None:
+                    if params["pe"] is None and re.search(
+                            r"(^|_)p_?e(_ratio)?$|price_earning", key):
+                        params["pe"] = fv
+                    elif params["pb"] is None and re.search(
+                            r"(^|_)p_?b(_ratio)?$|price_(to_)?book", key):
+                        params["pb"] = fv
+                    elif params["aum_cr"] is None and re.search(
+                            r"(^|_)aum($|_)|fund_size|net_assets", key):
+                        params["aum_cr"] = fv
+                if (params["as_of"] is None and isinstance(v, str)
+                        and re.search(r"(^|_)(as_?on(_date)?|portfolio_date"
+                                      r"|report_date|month_end)", key)
+                        and re.search(r"\d", v)):
+                    params["as_of"] = v.strip()
+
+    caps, assets, sectors, extra = {}, {}, {}, {}
+    for lst in _json_lists(js):
+        pairs = _list_pairs(lst)
+        if not pairs:
+            continue
+        kind, mapped, ex = _classify_pairs(pairs)
+        if kind == "caps" and len(mapped) > len(caps):
+            caps = mapped
+        elif kind == "assets" and len(mapped) > len(assets):
+            assets = mapped
+        elif kind == "sectors" and len(mapped) > len(sectors):
+            sectors, extra = mapped, ex
+
+    # dict-shaped allocations ({'large': 76.75, ...} / {'equity': 94.04})
+    for d in _walk_dicts(js):
+        pairs = [(str(k), _to_float(v)) for k, v in d.items()
+                 if _to_float(v) is not None and 0 <= _to_float(v) <= 100]
+        if len(pairs) < 2:
+            continue
+        kind, mapped, ex = _classify_pairs(pairs)
+        if kind == "caps" and len(mapped) > len(caps):
+            caps = mapped
+        elif kind == "assets" and len(mapped) > len(assets):
+            assets = mapped
+        elif kind == "sectors" and len(mapped) > len(sectors):
+            sectors, extra = mapped, ex
+
+    equity = assets.get("equity")
+    debt = assets.get("debt")
+    cash = next((v for k, v in assets.items() if k.startswith("cash")), None)
+    _apply_allocations(params, caps, equity, debt, cash, sectors, extra)
     return params
+
+
+def _fund_id(fund_ref) -> str | None:
+    s = str(fund_ref).strip()
+    m = re.search(r"/funds/(\d+)", s)
+    if m:
+        return m.group(1)
+    return s if s.isdigit() else None
+
+
+def _merge_params(api_p: dict | None, page_p: dict | None,
+                  url: str) -> dict:
+    """API values win; the page parse fills whatever the API lacked."""
+    out = dict(api_p) if api_p else blank_params()
+    if page_p:
+        for k in ("pe", "pb", "aum_cr", "large", "mid", "small",
+                  "debt_cash", "as_of"):
+            if out.get(k) is None:
+                out[k] = page_p.get(k)
+        if not out.get("sectors"):
+            out["sectors"] = page_p.get("sectors") or {}
+            out["extra_sectors"] = page_p.get("extra_sectors") or {}
+    out["url"] = (page_p or {}).get("url") or url
+    return out
+
+
+def _needs_page(p: dict | None) -> bool:
+    return (p is None or not p.get("sectors")
+            or any(p.get(k) is None for k in
+                   ("pe", "pb", "aum_cr", "large", "debt_cash")))
 
 
 # --------------------------------------------------------------------------- #
@@ -728,15 +961,33 @@ def _main() -> None:  # pragma: no cover
         sess.login(args.email, args.password or "")
         print("login: OK")
     url = fund_url(args.fund)
+
+    api_p = None
+    fid = _fund_id(url)
+    if fid:
+        js = sess.fetch_portfolio_json(fid, referer=url)
+        if js is not None:
+            jdump = Path(__file__).with_name("vr_api_dump.json")
+            jdump.write_text(json.dumps(js, indent=1), encoding="utf-8")
+            api_p = parse_portfolio_api(js)
+            print(f"portfolio API OK -> {jdump}")
+            print("-- parsed from API --")
+            print(json.dumps(api_p, indent=2))
+        else:
+            print("portfolio API returned nothing usable")
+
     r = sess.get(url)
     dump = Path(__file__).with_name("vr_page_dump.html")
     dump.write_text(r.text, encoding="utf-8")
     print(f"fetched {r.url} ({len(r.text):,} bytes) -> {dump}")
     if _is_login_wall(r.text):
         print("WARNING: page looks like a login wall")
-    out = parse_fund_page(r.text)
-    out["url"] = r.url
-    print(json.dumps(out, indent=2))
+    page_p = parse_fund_page(r.text)
+    page_p["url"] = r.url
+    print("-- parsed from page HTML --")
+    print(json.dumps(page_p, indent=2))
+    print("-- merged (what the app will use) --")
+    print(json.dumps(_merge_params(api_p, page_p, url), indent=2))
     if args.hunt:
         hunt_endpoints(sess, args.fund, r.text)
 
