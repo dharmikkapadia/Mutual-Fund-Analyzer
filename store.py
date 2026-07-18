@@ -54,6 +54,30 @@ def save(watchlists: dict) -> None:
     WATCHLIST_FILE.write_text(json.dumps(watchlists, indent=2))
 
 
+# ---- PF Review persistence (same browser-first strategy as watchlists) ---- #
+PF_FILE = APP_DIR / "pf_review.json"
+PF_DEFAULT: dict = {"snapshots": {}, "vr_urls": {}, "values": {}}
+
+
+def load_pf() -> dict:
+    """Monthly-review data: snapshots, VR page urls and invested values."""
+    if not BROWSER_ONLY and PF_FILE.exists():
+        try:
+            data = json.loads(PF_FILE.read_text())
+            if isinstance(data, dict):
+                return {k: dict(data.get(k) or {}) for k in PF_DEFAULT}
+        except (json.JSONDecodeError, ValueError, OSError):
+            pass
+    return {k: dict(v) for k, v in PF_DEFAULT.items()}
+
+
+def save_pf(data: dict) -> None:
+    if BROWSER_ONLY:
+        return
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    PF_FILE.write_text(json.dumps(data, indent=2))
+
+
 def add(watchlists: dict, list_name: str, code: int) -> dict:
     watchlists.setdefault(list_name, [])
     if int(code) not in watchlists[list_name]:

@@ -24,8 +24,10 @@ from streamlit_js_eval import streamlit_js_eval
 import cloud_sync
 import holdings as H
 import nav_data as D
+import pf_review as P
 import returns as R
 import store
+import vr_data as V
 
 # --------------------------------------------------------------------------- #
 # Viewing modes — each defines the full token set; native Streamlit widget
@@ -117,15 +119,17 @@ st.set_page_config(page_title="AFP NAV Explorer", page_icon="📈",
 # --------------------------------------------------------------------------- #
 LS_KEY = "afp_watchlists_v1"
 LS_THEME = "afp_theme_v1"
+LS_PF = "afp_pf_review_v1"
 USE_BROWSER_STORE = os.getenv("AFP_NO_BROWSER_STORE", "") != "1"
 
 if "watchlists" not in st.session_state:
-    boot, boot_theme = None, None
+    boot, boot_theme, boot_pf = None, None, None
     if USE_BROWSER_STORE:
         raw = streamlit_js_eval(
             js_expressions=("JSON.stringify({"
                             f"wl: localStorage.getItem('{LS_KEY}'), "
-                            f"th: localStorage.getItem('{LS_THEME}')}})"),
+                            f"th: localStorage.getItem('{LS_THEME}'), "
+                            f"pf: localStorage.getItem('{LS_PF}')}})"),
             key="ls_read")
         if raw is None:
             # Component round-trip pending; the value arriving triggers a rerun.
@@ -137,11 +141,19 @@ if "watchlists" not in st.session_state:
                 boot = {str(k): [int(c) for c in v]
                         for k, v in json.loads(obj["wl"]).items()}
             boot_theme = obj.get("th")
+            if obj.get("pf"):
+                pf = json.loads(obj["pf"])
+                if isinstance(pf, dict):
+                    boot_pf = {k: dict(pf.get(k) or {})
+                               for k in store.PF_DEFAULT}
         except (ValueError, TypeError, AttributeError):
             boot = None
     st.session_state.watchlists = boot or store.load()
     st.session_state.theme = (boot_theme if boot_theme in THEMES
                               else DEFAULT_THEME)
+    st.session_state.pf_data = boot_pf or store.load_pf()
+if "pf_data" not in st.session_state:
+    st.session_state.pf_data = store.load_pf()
 if "active_list" not in st.session_state:
     st.session_state.active_list = next(iter(st.session_state.watchlists))
 if "theme" not in st.session_state:
@@ -187,6 +199,11 @@ if USE_BROWSER_STORE:
         js_expressions=f"localStorage.setItem('{LS_THEME}', "
                        f"{json.dumps(st.session_state.theme)})",
         key="ls_write_theme")
+    _pf_payload = json.dumps(st.session_state.pf_data, separators=(",", ":"))
+    streamlit_js_eval(
+        js_expressions=f"localStorage.setItem('{LS_PF}', "
+                       f"{json.dumps(_pf_payload)})",
+        key="ls_write_pf")
 
 st.markdown(f"""
 <style>
@@ -712,7 +729,7 @@ m4.metric("5Y CAGR", pct(tr.loc["5Y", "Annualised %"]) if "5Y" in tr.index else 
 m5.metric("Max drawdown", pct(R.max_drawdown(series) * 100))
 
 tabs = st.tabs(["Dashboard", "Overview", "Returns", "Rolling", "SIP / XIRR",
-                "Compare", "Holdings", "Peers", "Portfolio"])
+                "Compare", "Holdings", "Peers", "Portfolio", "PF Review"])
 
 RET_COLS = ["1D %", "1Y %", "3Y % pa", "5Y % pa"]
 
@@ -1731,6 +1748,360 @@ with tabs[8]:
         elif port_pick:
             st.info("Not enough overlapping history across the selected "
                     "schemes to blend.")
+
+# ---- PF Review (monthly Value Research parameters, value-weighted) ---- #
+def _pf_save() -> None:
+    store.save_pf(st.session_state.pf_data)
+
+
+def _pf_grid_df(pf_codes: list[int], values: dict, snaps: dict) -> pd.DataFrame:
+    """Editor seed: fetched params, else the latest snapshot, else blanks."""
+    latest = snaps.get(max(snaps)) if snaps else None
+    by_code = ({str(r.get("code")): r for r in P.snapshot_rows(latest)}
+               if latest else {})
+    fetched = st.session_state.get("pf_fetched", {})
+    recs = []
+    for c in pf_codes:
+        rec = {"Code": str(c), "Scheme Name": name_of(universe, c),
+               "Value": float(values.get(str(c)) or 0.0)}
+        src = fetched.get(str(c), {}).get("row") or {
+            k: by_code.get(str(c), {}).get(k) for k in P.PARAM_COLS}
+        for k in P.PARAM_COLS:
+            v = src.get(k)
+            rec[k] = np.nan if v is None else v
+        recs.append(rec)
+    return pd.DataFrame(recs).set_index("Code")
+
+
+with tabs[9]:
+    section("Monthly portfolio review")
+    st.caption(
+        "The watchlist as your real portfolio: enter each scheme's invested "
+        "value, pull its month-end parameters (P/B, P/E, AUM, market-cap "
+        "split, sectors) from its Value Research page, and read the "
+        "**value-weighted** portfolio aggregates — the app version of the "
+        "monthly MF Portfolio Review spreadsheet. Every cell stays editable, "
+        "so the tab also works fully manually without a VR login.")
+
+    pf = st.session_state.pf_data
+    vr_urls: dict = pf.setdefault("vr_urls", {})
+    pf_values: dict = pf.setdefault("values", {})
+    pf_snaps: dict = pf.setdefault("snapshots", {})
+    sess = st.session_state.get("vr_session")
+
+    # -- Value Research connection (credentials live in memory only) -- #
+    with st.expander("Value Research login",
+                     expanded=sess is None and not pf_snaps):
+        st.caption(
+            "Uses **your own** VR account to read fund-portfolio pages. "
+            "Credentials are kept in this session's memory only — never "
+            "stored, never synced. If VR blocks scripted logins, paste the "
+            "`Cookie` header from a logged-in browser tab instead "
+            "(DevTools → Network → any valueresearchonline.com request).")
+        lc1, lc2 = st.columns(2)
+        vr_email = lc1.text_input("VR email", key="vr_email",
+                                  autocomplete="off")
+        vr_pass = lc2.text_input("VR password", key="vr_pass",
+                                 type="password", autocomplete="off")
+        vr_cookie = st.text_input("…or paste a logged-in Cookie header",
+                                  key="vr_cookie", type="password")
+        cb1, cb2 = st.columns([1, 3])
+        if cb1.button("Connect", type="primary", key="vr_connect"):
+            try:
+                _s = V.VRSession()
+                if vr_cookie.strip():
+                    _s.set_cookie_header(vr_cookie)
+                else:
+                    with st.spinner("Logging in to Value Research…"):
+                        _s.login(vr_email.strip(), vr_pass)
+                st.session_state.vr_session = _s
+                sess = _s
+                st.success("Connected.")
+            except V.VRError as e:
+                st.error(str(e))
+        if sess is not None:
+            cb2.caption("✅ Session active. Fetches use polite delays "
+                        "(~2 s per fund).")
+
+    # -- scheme rows: invested value lives in the grid; VR page per scheme -- #
+    section("Fund pages on Value Research")
+    st.caption("One URL per scheme (e.g. `…/funds/16026/hdfc-flexi-cap-fund"
+               "-direct-plan/`). Remembered across sessions. **Auto-find** "
+               "fills the blanks via VR search when connected.")
+    url_changed = False
+    _unonce = st.session_state.get("pf_url_nonce", 0)
+    for c in codes:
+        u = st.text_input(
+            name_of(universe, c), key=f"pfu_{_unonce}_{c}",
+            value=vr_urls.get(str(c), ""),
+            placeholder="https://www.valueresearchonline.com/funds/…")
+        if u.strip() != vr_urls.get(str(c), ""):
+            vr_urls[str(c)] = u.strip()
+            url_changed = True
+    if url_changed:
+        _pf_save()
+
+    ac1, ac2 = st.columns([1, 1])
+    if ac1.button("Auto-find VR pages", disabled=sess is None,
+                  help="Search VR for schemes whose URL is blank."):
+        misses = []
+        with st.spinner("Searching Value Research…"):
+            for c in codes:
+                if vr_urls.get(str(c)):
+                    continue
+                nm = name_of(universe, c)
+                try:
+                    cands = sess.search_funds(nm)
+                except Exception as e:  # noqa: BLE001
+                    misses.append(f"{nm}: search failed ({e})")
+                    continue
+                target = H._tokens(nm)
+                best, score = None, 0.0
+                for cn, cu in cands:
+                    sc = H._name_score(target, cn)
+                    if sc > score:
+                        best, score = cu, sc
+                if best and score >= 0.45:
+                    vr_urls[str(c)] = best
+                else:
+                    misses.append(f"{nm}: no confident match "
+                                  f"(best {score:.2f})")
+        _pf_save()
+        # fresh widget keys so the URL fields pick up the found values
+        st.session_state.pf_url_nonce = _unonce + 1
+        if misses:
+            st.session_state.pf_msgs = [
+                ("warning", "Not auto-matched — paste these URLs manually:"
+                 "\n\n- " + "\n- ".join(misses))]
+        st.rerun()
+
+    if ac2.button("Fetch from Value Research", type="primary",
+                  disabled=sess is None,
+                  help="Pull P/B, P/E, AUM, cap split and sectors for every "
+                       "scheme that has a VR page set."):
+        fetched = st.session_state.setdefault("pf_fetched", {})
+        errs, notes = [], []
+        prog = st.progress(0.0, text="Fetching from Value Research…")
+        todo = [c for c in codes if vr_urls.get(str(c))]
+        for i, c in enumerate(todo):
+            nm = name_of(universe, c)
+            prog.progress((i + 1) / max(1, len(todo)), text=f"VR: {nm}")
+            try:
+                prm = sess.fetch_fund(vr_urls[str(c)])
+                fetched[str(c)] = {"row": P.params_to_row(prm),
+                                   "as_of": prm.get("as_of")}
+                if prm.get("extra_sectors"):
+                    ex = ", ".join(f"{k} {v:.2f}%" for k, v
+                                   in prm["extra_sectors"].items())
+                    notes.append(f"{nm}: unmapped sector rows — {ex}")
+            except Exception as e:  # noqa: BLE001
+                errs.append(f"{nm}: {e}")
+        prog.empty()
+        msgs = []
+        skipped = len(codes) - len(todo)
+        if skipped:
+            msgs.append(("info", f"{skipped} scheme(s) skipped — no VR "
+                                 "page set."))
+        if notes:
+            msgs.append(("warning", "Left out of the sector columns (add "
+                                    "manually if needed):\n\n- "
+                                    + "\n- ".join(notes)))
+        if errs:
+            msgs.append(("error", "Fetch failures:\n\n- "
+                                  + "\n- ".join(errs)))
+        st.session_state.pf_msgs = msgs
+        if fetched:
+            st.session_state.pf_nonce = st.session_state.get("pf_nonce",
+                                                             0) + 1
+        st.rerun()
+
+    for _kind, _msg in st.session_state.pop("pf_msgs", []):
+        getattr(st, _kind)(_msg)
+
+    fetched_meta = st.session_state.get("pf_fetched", {})
+    if fetched_meta:
+        dates = {m.get("as_of") for m in fetched_meta.values()
+                 if m.get("as_of")}
+        st.caption(f"Fetched {len(fetched_meta)} scheme(s)"
+                   + (f" · portfolio as on {', '.join(sorted(dates))}"
+                      if dates else ""))
+
+    # -- the review grid (every cell editable, like the spreadsheet) -- #
+    section("Review grid")
+    st.caption("₹ **Value** = your invested amount per scheme (drives the "
+               "weights). Percentages are 0–100. Edit any cell — fetched "
+               "numbers are just prefills.")
+    seed = _pf_grid_df(codes, pf_values, pf_snaps)
+    npct = st.column_config.NumberColumn(format="%.2f", min_value=0.0)
+    edited = st.data_editor(
+        seed, key=f"pf_editor_{st.session_state.get('pf_nonce', 0)}",
+        hide_index=True, width="stretch", num_rows="fixed",
+        column_config={
+            "Scheme Name": st.column_config.TextColumn(disabled=True,
+                                                       width="medium"),
+            "Value": st.column_config.NumberColumn(format="localized",
+                                                   min_value=0.0),
+            "P/B": npct, "P/E": npct,
+            "Aum in cr": st.column_config.NumberColumn(format="localized",
+                                                       min_value=0.0),
+            **{c: npct for c in [*P.CAP_COLS, "Debt & Cash",
+                                 *P.SECTOR_COLS]},
+        })
+
+    val_changed = False
+    for c_idx, r in edited.iterrows():
+        v = 0.0 if pd.isna(r["Value"]) else float(r["Value"])
+        if pf_values.get(str(c_idx)) != v:
+            pf_values[str(c_idx)] = v
+            val_changed = True
+    if val_changed:
+        _pf_save()
+
+    rows = []
+    for c_idx, r in edited.iterrows():
+        rows.append({"code": str(c_idx), "name": r["Scheme Name"],
+                     "value": r["Value"], "vr_url": vr_urls.get(str(c_idx)),
+                     **{k: r[k] for k in P.PARAM_COLS}})
+    review = P.review_frame(rows)
+    summary = P.weighted_summary(review)
+    have_values = summary["Value"] > 0
+
+    if not have_values:
+        st.info("Enter invested values in the grid to see the weighted "
+                "portfolio aggregates.")
+    else:
+        section("Weighted portfolio aggregates")
+        weights = review["Value"] / summary["Value"] * 100.0
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Total value", f"₹{summary['Value']:,.0f}")
+        m2.metric("Weighted P/E", "—" if pd.isna(summary["P/E"])
+                  else f"{summary['P/E']:.2f}")
+        m3.metric("Weighted P/B", "—" if pd.isna(summary["P/B"])
+                  else f"{summary['P/B']:.2f}")
+        m4.metric("Weighted AUM", "—" if pd.isna(summary["Aum in cr"])
+                  else f"₹{summary['Aum in cr']:,.0f} cr")
+        tot = summary[P.TOTAL_COL]
+        m5.metric("Sectors + cash", "—" if pd.isna(tot) else f"{tot:.1f}%",
+                  help="Debt & Cash + all sector weights — should land "
+                       "near 100% if the data is complete.")
+
+        cap_vals = [summary[c] for c in [*P.CAP_COLS, "Debt & Cash"]]
+        if not all(pd.isna(v) for v in cap_vals):
+            cfig = go.Figure()
+            for lbl, v, col in zip(
+                    ["Large", "Mid", "Small", "Debt & Cash"], cap_vals,
+                    [ACCENT, SERIES[1], SERIES[3], MUTED]):
+                cfig.add_trace(go.Bar(
+                    x=[0.0 if pd.isna(v) else v], y=["Mix"], name=lbl,
+                    orientation="h", marker_color=col,
+                    hovertemplate=f"{lbl}: %{{x:.2f}}%<extra></extra>"))
+            cfig.update_layout(barmode="stack", showlegend=True, height=110,
+                               margin=dict(l=0, r=0, t=0, b=0))
+            tv(cfig, 110, unified=False, spikes=False)
+            cfig.update_xaxes(visible=False)
+            cfig.update_yaxes(visible=False)
+            chart(cfig)
+            st.caption("Market-cap mix of the whole portfolio (weighted "
+                       "Large / Mid / Small % of equity, plus Debt & Cash).")
+
+        sect = summary[P.SECTOR_COLS].dropna()
+        sect = sect[sect > 0].sort_values(ascending=True)
+        if not sect.empty:
+            sfig = go.Figure(go.Bar(
+                x=sect.values, y=sect.index, orientation="h",
+                marker_color=ACCENT,
+                hovertemplate="%{y}: %{x:.2f}%<extra></extra>"))
+            tv(sfig, max(220, 40 + 22 * len(sect)), unified=False,
+               spikes=False)
+            sfig.update_xaxes(ticksuffix="%")
+            chart(sfig)
+            st.caption("Weighted sector allocation (% of portfolio, "
+                       "incl. the debt & cash drag).")
+
+        full = review.copy()
+        full.insert(2, "Weight %", weights.round(2))
+        srow = {"Scheme Name": "◆ PORTFOLIO (weighted)", "Weight %": 100.0,
+                **{k: summary[k] for k in [P.VALUE_COL, *P.PARAM_COLS,
+                                           P.TOTAL_COL]}}
+        full = pd.concat([full, pd.DataFrame([srow])], ignore_index=True)
+        with st.expander("Full review table (as it will export)"):
+            table(full)
+
+    # -- monthly snapshots + Excel export -- #
+    section("Monthly snapshots & export")
+    sc1, sc2, sc3 = st.columns([1.2, 1, 1.8])
+    as_on = sc1.date_input("As on", value=dt.date.today(),
+                           key="pf_as_on", format="DD/MM/YYYY")
+    mkey = as_on.strftime("%Y-%m")
+    if sc2.button(f"Save snapshot · {mkey}", disabled=not have_values):
+        pf_snaps[mkey] = P.snapshot_pack(rows, as_on.strftime("%d/%m/%Y"))
+        _pf_save()
+        st.success(f"Saved {mkey} ({len(rows)} schemes). Snapshots persist "
+                   "in this browser.")
+    if have_values:
+        sc3.download_button(
+            "⬇ Download Excel (PF Review)",
+            data=P.to_excel_bytes(review, as_on.strftime("%d/%m/%Y")),
+            file_name=f"MF_Portfolio_Review_as_on_"
+                      f"{as_on.strftime('%d%m%Y')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument."
+                 "spreadsheetml.sheet",
+            help="Same layout and live formulas as the manual workbook.")
+
+    if pf_snaps:
+        months = sorted(pf_snaps, reverse=True)
+        pick = st.multiselect(
+            "Compare saved months (weighted aggregates)", months,
+            default=months[:2], key="pf_cmp")
+        if pick:
+            comp = {}
+            for mk in sorted(pick):
+                srows = P.snapshot_rows(pf_snaps[mk])
+                if srows:
+                    comp[mk] = P.weighted_summary(P.review_frame(srows))
+            if comp:
+                cdf = pd.DataFrame(comp).T
+                if len(comp) == 2:
+                    a, b = cdf.index[0], cdf.index[1]
+                    cdf.loc[f"Δ {b} vs {a}"] = cdf.loc[b] - cdf.loc[a]
+                table(cdf.reset_index(names="Month"))
+        mc1, mc2 = st.columns([1.2, 1])
+        load_pick = mc1.selectbox("Load a snapshot into the grid", months,
+                                  key="pf_load_pick")
+        if mc2.button("Load / Delete…", key="pf_load_menu",
+                      help="Load fills the grid from the chosen month; "
+                           "delete removes it permanently."):
+            st.session_state.pf_manage = True
+        if st.session_state.get("pf_manage"):
+            b1, b2, b3 = st.columns(3)
+            if b1.button(f"Load {load_pick}", key="pf_do_load"):
+                by = {str(r.get("code")): r
+                      for r in P.snapshot_rows(pf_snaps[load_pick])}
+                st.session_state.pf_fetched = {
+                    k: {"row": {c: v.get(c) for c in P.PARAM_COLS},
+                        "as_of": pf_snaps[load_pick].get("as_on")}
+                    for k, v in by.items()}
+                for k, v in by.items():
+                    if v.get("value") is not None:
+                        pf_values[k] = v["value"]
+                st.session_state.pf_nonce = st.session_state.get(
+                    "pf_nonce", 0) + 1
+                st.session_state.pf_manage = False
+                _pf_save()
+                st.rerun()
+            if b2.button(f"Delete {load_pick}", key="pf_do_del"):
+                pf_snaps.pop(load_pick, None)
+                st.session_state.pf_manage = False
+                _pf_save()
+                st.rerun()
+            if b3.button("Cancel", key="pf_cancel"):
+                st.session_state.pf_manage = False
+                st.rerun()
+
+    st.caption("Fund parameters © Value Research — fetched with your own "
+               "account, for your personal review. Numbers land in an "
+               "editable grid, so the tab works without VR too (type the "
+               "values, exactly like the spreadsheet).")
 
 st.divider()
 st.caption("Data: AMFI NAVAll.txt (universe + latest NAV) and api.mfapi.in "

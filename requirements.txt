@@ -7,3 +7,6 @@ customtkinter>=5.2
 streamlit-js-eval>=0.1.7
 cryptography>=41.0
 argon2-cffi>=23.1
+openpyxl>=3.1
+beautifulsoup4>=4.12
+lxml>=5.0

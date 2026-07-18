@@ -33,6 +33,7 @@ Subtle motion (fade-up transitions, hover lifts) respects
 | AMFI `NAVAll.txt` | Full scheme universe (code, ISIN, name, category, fund house) + latest NAV. Powers search, the watchlist picker and the daily NAV. Dead schemes (stale dates) are filtered out. |
 | `api.mfapi.in/mf/{code}` | Full daily NAV history per scheme — the basis of every returns calculation. Fetched on-demand and cached in-session. |
 | `rupeevest.com` (`get_holding_asset`) | Portfolio holdings, sector splits and fund facts (AUM, managers). Matched to scheme codes via the bundled `rupeevest_codes.csv`. Groww/Kuvera are automatic fallbacks; manual CSV upload is the last resort. |
+| `valueresearchonline.com` (login required) | Fund-level portfolio parameters for the **PF Review** tab: P/B, P/E, AUM, large/mid/small-cap split, debt & cash and sector allocation. Fetched with the *user's own* VR account (credentials held in session memory only); every fetched number lands in an editable grid, so the tab also works fully manually. See `vr_data.py`. |
 
 ## Features
 - **Watchlist dashboard** — sortable grid of every scheme in the active list: 1Y NAV sparkline, latest NAV, 1D/1Y/3Y/5Y returns and max drawdown, red/green coded.
@@ -46,6 +47,7 @@ Subtle motion (fade-up transitions, hover lifts) respects
 - **Holdings & overlap** — portfolio holdings, sectors and fund facts from Rupeevest's API; select multiple schemes for an **overlap matrix** (sum of min weights), a combined holdings table with common positions highlighted and unique counts, and a grouped **sector-allocation** comparison. See `holdings.py`.
 - **Category peers** — benchmark a scheme against its full AMFI category (e.g. small-cap vs every small-cap): rank & percentile per horizon, a box-plot distribution, a growth-of-₹100 chart overlaying chosen peers and an equal-weight **category-average** line, a **risk-vs-return scatter** (volatility vs 3Y CAGR with median crosshairs), a **3Y rolling-return consistency band** (the fund vs the peer 25–75% range), a sortable peer table, and one-click adding of same-category peers to the watchlist.
 - **Portfolio** — treat the watchlist as one weighted portfolio: blended growth-of-₹100, blended CAGR/volatility/max-drawdown/Sharpe, and a weekly-return correlation matrix for diversification.
+- **PF Review** — the app version of a monthly "MF Portfolio Review" spreadsheet: enter each watchlist scheme's invested ₹ value, pull its month-end parameters (P/B, P/E, AUM, large/mid/small-cap split, debt & cash, 19 sector weights) from its Value Research page, and read the **investment-value-weighted** portfolio aggregates (blended P/E, cap mix, sector mix). Everything lands in an editable grid (manual entry works without VR), monthly **snapshots** persist in the browser for month-over-month comparison, and one click downloads the review as an Excel workbook with live `SUMPRODUCT` formulas — the same layout as the manual sheet. See `pf_review.py` / `vr_data.py`.
 - **Watchlists** — multiple named lists, persisted in the **browser** (localStorage) so they survive cloud restarts and stay per-visitor; `~/.afp_nav_explorer/watchlists.json` is the desktop fallback / migration source.
 
 ## Run
@@ -73,7 +75,9 @@ filesystem is auto-disabled; `AFP_BROWSER_ONLY=1` forces this on other hosts,
 - `returns.py` — pure pandas/numpy analytics engine (returns, risk ratios, capture, drawdowns, SIP/goal, blend, correlation) — no network or UI, fully unit-testable.
 - `nav_data.py` — AMFI parsing + mfapi history fetch.
 - `holdings.py` — Rupeevest/Groww/Kuvera holdings fetch + overlap analytics.
-- `store.py` — watchlist persistence (browser localStorage primary, JSON file fallback).
+- `vr_data.py` — Value Research login + fund-portfolio page parsing (label-driven, defensive). Runnable as a CLI to diagnose parsing against the live site: `python vr_data.py 16026 --email … --password …`.
+- `pf_review.py` — pure PF-Review engine: value-weighted parameter maths, monthly snapshot (de)serialisation and the Excel export with live formulas — no network or UI, unit-testable offline.
+- `store.py` — watchlist + PF-Review persistence (browser localStorage primary, JSON file fallback).
 - `cloud_sync.py` — optional encrypted, cross-device watchlist sync (see below).
 - `launcher.py` — customtkinter desktop launcher.
 - `rupeevest_codes.csv` — bundled AMFI → Rupeevest scheme-code map.
