@@ -421,16 +421,128 @@ def _row_pairs(soup):
         label, value = texts[0], _to_float(texts[1])
         if value is None:                      # label ... value at the end
             value = _to_float(texts[-1])
-        if label and value is not None:
+        if _to_float(label) is not None:       # value-first layouts, e.g.
+            num = _to_float(label)             # '94.04% Equity'
+            word = next((t for t in texts[1:]
+                         if _to_float(t) is None and t), None)
+            if word is not None:
+                label, value = word, num
+        if label and value is not None and _to_float(label) is None:
             pairs.append((label, value))
     return pairs
+
+
+# -- scoped extractors for VR's current fund-page DOM (July 2026) -------- #
+# Verified against the live page structure:
+#   * Concentration cards:  div.content > p.top (label) + p.middle (value)
+#   * Portfolio aggregates: #portfolio_tab .info > p.info-title +
+#     p.info-value ('Large 76.75%'; p.info-value-name holds the category
+#     figure and must be ignored)
+#   * Asset allocation:     ul.portfolio-tab-list li > span.portfolio-head
+#     (value) + span.portfolio-subhead (label) — value comes FIRST, and the
+#     buckets include 'Real Estate', which also exists as a *sector* name —
+#     so asset buckets must never leak into the sector map
+#   * Sectors:              table#sector_wise-holding_table rows
+#     [Sector, Fund %, Category %]; Fund % is already % of total assets
+#   * As-on date:           p#top-holding-as-on-date under Top Holdings
+def _scoped_stat_cards(soup, params: dict) -> None:
+    for content in soup.select("div.content"):
+        top = content.find("p", class_="top")
+        mid = content.find("p", class_="middle")
+        if top is None or mid is None:
+            continue
+        label = top.get_text(" ", strip=True).lower()
+        val = _to_float(mid.get_text(" ", strip=True))
+        if val is None:
+            continue
+        if "p/e" in label and params["pe"] is None:
+            params["pe"] = val
+        elif "p/b" in label and params["pb"] is None:
+            params["pb"] = val
+
+
+def _scoped_caps(soup) -> dict:
+    out = {}
+    for info in soup.select("#portfolio_tab .info"):
+        t = info.find("p", class_="info-title")
+        v = info.find("p", class_="info-value")
+        if t is None or v is None:
+            continue
+        cap = _norm_cap_label(_norm_label(t.get_text(" ", strip=True)))
+        fv = _to_float(v.get_text(" ", strip=True))
+        if cap is not None and fv is not None and 0 <= fv <= 100:
+            out.setdefault(cap, fv)
+    return out
+
+
+def _scoped_assets(soup) -> dict:
+    out = {}
+    for li in soup.select("ul.portfolio-tab-list li"):
+        head = li.find("span", class_="portfolio-head")
+        sub = li.find("span", class_="portfolio-subhead")
+        if head is None or sub is None:
+            continue
+        v = _to_float(head.get_text(" ", strip=True))
+        lab = _norm_label(sub.get_text(" ", strip=True))
+        if v is not None and lab and lab not in out:
+            out[lab] = v
+    return out
+
+
+def _scoped_sectors(soup) -> tuple[dict, dict]:
+    """(mapped sectors, unmapped rows) from the sector-holdings table.
+
+    DataTables renders sticky-header *clone* tables with the same classes
+    but no data — parse every candidate and keep the fullest one.
+    """
+    best: tuple[dict, dict] = ({}, {})
+    tables = soup.find_all("table", id="sector_wise-holding_table")
+    tables += [t for t in soup.find_all("table")
+               if t not in tables
+               and "sector" in " ".join(t.get("class", [])).lower()]
+    for table in tables:
+        sectors, extra = {}, {}
+        body = table.find("tbody") or table
+        for tr in body.find_all("tr"):
+            cells = [td.get_text(" ", strip=True)
+                     for td in tr.find_all(["td", "th"])]
+            if len(cells) < 2 or not cells[0]:
+                continue
+            val = _to_float(cells[1])
+            if val is None or not 0 <= val <= 100:
+                continue
+            canonical = _SECTOR_LOOKUP.get(_norm_label(cells[0]))
+            if canonical is not None:
+                sectors[canonical] = sectors.get(canonical, 0.0) + val
+            else:
+                extra.setdefault(cells[0], val)
+        if len(sectors) > len(best[0]):
+            best = (sectors, extra)
+    return best
+
+
+def _scoped_as_of(soup) -> str | None:
+    rx = re.compile(r"as\s+on\s+([0-9]{1,2}[-/ ][A-Za-z0-9]{2,9}[-/ ]"
+                    r"[0-9]{2,4})", re.I)
+    el = soup.find(id="top-holding-as-on-date")
+    scopes = [el] + soup.select("section.portfolio-tab-container")
+    for scope in scopes:
+        if scope is None:
+            continue
+        m = rx.search(scope.get_text(" ", strip=True))
+        if m:
+            return m.group(1)
+    return None
 
 
 def parse_fund_page(html: str) -> dict:
     """Extract the canonical parameter dict from a VR fund page's HTML.
 
-    Every field degrades to None (or {}) when not found — the caller/UI
-    decides whether that's fatal. Percentages are returned on a 0–100 scale.
+    Scoped extractors for VR's known DOM run first; generic label-driven
+    heuristics fill anything still missing (so older/altered layouts and
+    HTML fragments from data endpoints keep working). Every field degrades
+    to None (or {}) when not found — the caller/UI decides whether that's
+    fatal. Percentages are returned on a 0–100 scale.
     """
     if BeautifulSoup is None:
         raise VRError("beautifulsoup4 is not installed — "
@@ -439,41 +551,55 @@ def parse_fund_page(html: str) -> dict:
     _from_json_islands(html, params)
     soup = BeautifulSoup(html or "", "lxml")
 
+    _scoped_stat_cards(soup, params)
     if params["pe"] is None:
         params["pe"] = _label_number(soup, (r"P/?E\s*Ratio", r"\bP/E\b"))
     if params["pb"] is None:
         params["pb"] = _label_number(soup, (r"P/?B\s*Ratio", r"\bP/B\b"))
     if params["aum_cr"] is None:
         params["aum_cr"] = _label_number(
-            soup, (r"Fund\s*Size", r"\bAUM\b", r"Net\s*Assets"))
+            soup, (r"Fund\s*Size", r"\bAUM\b", r"Net\s*Assets",
+                   r"\bAssets\b"))
 
-    caps, sectors, extra = {}, {}, {}
-    seen_raw = set()          # sector rows repeat (chart legend + table) —
-    equity = debt = cash = None    # count each *distinct label* once
-    for label, value in _row_pairs(soup):
-        norm = _norm_label(label)
-        if not norm or value < 0 or value > 100:
-            continue
-        cap = _norm_cap_label(norm)
-        if cap is not None:
-            caps.setdefault(cap, value)
-            continue
-        if norm == "equity" and equity is None:
-            equity = value
-            continue
-        if norm == "debt" and debt is None:
-            debt = value
-            continue
-        if norm.startswith("cash") and cash is None:
-            cash = value
-            continue
-        canonical = _SECTOR_LOOKUP.get(norm)
-        if canonical is not None:
-            if (canonical, norm) not in seen_raw:   # 'Energy' + 'Utilities'
-                seen_raw.add((canonical, norm))     # sum; repeats don't
-                sectors[canonical] = sectors.get(canonical, 0.0) + value
-        elif norm in ("others", "other") and label.strip() not in extra:
-            extra[label.strip()] = value
+    caps = _scoped_caps(soup)
+    assets = _scoped_assets(soup)
+    sectors, extra = _scoped_sectors(soup)
+    equity = assets.get("equity")
+    debt = assets.get("debt")
+    cash = next((v for k, v in assets.items() if k.startswith("cash")), None)
+
+    # generic label-driven sweep fills whatever the scoped passes missed
+    caps_scoped = bool(caps)
+    sectors_scoped = bool(sectors)
+    if not caps or not sectors or equity is None:
+        seen_raw = set()      # sector rows repeat (chart legend + table) —
+        for label, value in _row_pairs(soup):   # count distinct labels once
+            norm = _norm_label(label)
+            if not norm or value < 0 or value > 100:
+                continue
+            cap = _norm_cap_label(norm)
+            if cap is not None:
+                if not caps_scoped:
+                    caps.setdefault(cap, value)
+                continue
+            if norm == "equity" and equity is None:
+                equity = value
+                continue
+            if norm == "debt" and debt is None:
+                debt = value
+                continue
+            if norm.startswith("cash") and cash is None:
+                cash = value
+                continue
+            if sectors_scoped:    # authoritative table already parsed
+                continue
+            canonical = _SECTOR_LOOKUP.get(norm)
+            if canonical is not None:
+                if (canonical, norm) not in seen_raw:  # 'Energy'+'Utilities'
+                    seen_raw.add((canonical, norm))    # sum; repeats don't
+                    sectors[canonical] = sectors.get(canonical, 0.0) + value
+            elif norm in ("others", "other") and label.strip() not in extra:
+                extra[label.strip()] = value
 
     # 5-bucket (giant..tiny) collapses into the sheet's 3 buckets; a bucket
     # missing while others parsed means it genuinely holds 0%
@@ -483,18 +609,99 @@ def parse_fund_page(html: str) -> dict:
         params["mid"] = caps.get("mid", 0.0)
         params["small"] = round(caps.get("small", 0.0)
                                 + caps.get("tiny", 0.0), 4)
-    if debt is not None or cash is not None:
-        params["debt_cash"] = round((debt or 0.0) + (cash or 0.0), 4)
-    elif equity is not None:
+    # the review sheet's 'Debt & Cash' is everything that isn't equity
+    # (VR's asset buckets include Debt, Real Estate and Cash & Cash Eq.)
+    if equity is not None:
         params["debt_cash"] = round(100.0 - equity, 4)
+    elif debt is not None or cash is not None:
+        params["debt_cash"] = round((debt or 0.0) + (cash or 0.0), 4)
 
     params["sectors"] = {k: round(v, 4) for k, v in sectors.items()}
     params["extra_sectors"] = {k: round(v, 4) for k, v in extra.items()}
 
-    m = re.search(r"as\s+on\s+([0-9]{1,2}[-/ ][A-Za-z0-9]{2,9}[-/ ]"
-                  r"[0-9]{2,4})", soup.get_text(" ", strip=True), re.I)
-    params["as_of"] = m.group(1) if m else None
+    params["as_of"] = _scoped_as_of(soup)
+    if params["as_of"] is None:
+        m = re.search(r"as\s+on\s+([0-9]{1,2}[-/ ][A-Za-z0-9]{2,9}[-/ ]"
+                      r"[0-9]{2,4})", soup.get_text(" ", strip=True), re.I)
+        params["as_of"] = m.group(1) if m else None
     return params
+
+
+# --------------------------------------------------------------------------- #
+# Endpoint hunting — find where the page's JS loads the portfolio data from
+# --------------------------------------------------------------------------- #
+_HUNT_WORDS = ("portfolio", "sector", "holding", "aggregate", "asset",
+               "allocation", "concentration", "fund-data", "snapshot")
+_MARKERS = ("p/e", "p/b", "sector", "financial", "large", "equity")
+
+
+def _candidate_urls(sess: VRSession, fund_id: str, html: str) -> list[str]:
+    """URL-ish strings mentioning portfolio-ish words, from the page's
+    inline scripts and its same-domain JS bundles, plus educated guesses."""
+    texts = [html or ""]
+    if BeautifulSoup is not None:
+        soup = BeautifulSoup(html or "", "lxml")
+        srcs = [s.get("src") for s in soup.find_all("script", src=True)]
+        srcs = [urljoin(VR_BASE, s) for s in srcs
+                if s and ("valueresearch" in s or s.startswith("/"))]
+        for s in srcs[:10]:
+            try:
+                time.sleep(0.5)
+                b = sess.s.get(s, timeout=TIMEOUT)
+                if b.ok and len(b.text) < 3_000_000:
+                    texts.append(b.text)
+            except requests.RequestException:
+                pass
+    found = set()
+    rx = re.compile(r"""["']((?:https?://[^"']+|/[A-Za-z0-9_\-/{}$.]+))["']""")
+    for t in texts:
+        for u in rx.findall(t):
+            low = u.lower()
+            if any(w in low for w in _HUNT_WORDS) and not low.endswith(
+                    (".js", ".css", ".png", ".svg", ".jpg", ".woff2")):
+                for pat in ("{id}", "{fundId}", "${id}", "${fundId}",
+                            "{{id}}", "FUND_ID"):
+                    u = u.replace(pat, fund_id)
+                found.add(urljoin(VR_BASE, u))
+    guesses = [
+        f"/api/fund/{fund_id}/portfolio/", f"/api/fund/{fund_id}/",
+        f"/funds/{fund_id}/portfolio-data/",
+        f"/funds/portfolio-data/{fund_id}/",
+        f"/funds/{fund_id}/fund-portfolio-data/",
+        f"/api/funds/{fund_id}/portfolio/",
+    ]
+    found.update(VR_BASE + g for g in guesses)
+    return sorted(found)[:30]
+
+
+def hunt_endpoints(sess: VRSession, fund_ref: str, html: str) -> None:
+    m = re.search(r"(\d{3,6})", str(fund_ref))
+    fund_id = m.group(1) if m else str(fund_ref)
+    cands = _candidate_urls(sess, fund_id, html)
+    print(f"\n-- probing {len(cands)} candidate endpoints --")
+    hits = []
+    for u in cands:
+        time.sleep(1.0)
+        try:
+            r = sess.s.get(u, timeout=TIMEOUT)
+            body = r.text or ""
+            low = body.lower()
+            marks = [w for w in _MARKERS if w in low]
+            line = (f"{r.status_code} {len(body):>8,}B "
+                    f"{(r.headers.get('content-type') or '?')[:24]:24} {u}")
+            if r.ok and marks:
+                hits.append(u)
+                line += f"   <-- markers: {','.join(marks)}"
+            print(line)
+            if r.ok and marks and "json" in (
+                    r.headers.get("content-type") or ""):
+                print("      preview:", body[:300].replace("\n", " "))
+        except requests.RequestException as e:
+            print(f"ERR  {type(e).__name__}: {u}")
+    print("\npromising:" if hits else
+          "\nno endpoint hit — send vr_page_dump.html for analysis")
+    for u in hits:
+        print(" ", u)
 
 
 # --------------------------------------------------------------------------- #
@@ -510,6 +717,8 @@ def _main() -> None:  # pragma: no cover
     ap.add_argument("--email")
     ap.add_argument("--password")
     ap.add_argument("--cookie", help="Cookie header from a logged-in browser")
+    ap.add_argument("--hunt", action="store_true",
+                    help="probe likely data endpoints the page's JS calls")
     args = ap.parse_args()
 
     sess = VRSession()
@@ -528,6 +737,8 @@ def _main() -> None:  # pragma: no cover
     out = parse_fund_page(r.text)
     out["url"] = r.url
     print(json.dumps(out, indent=2))
+    if args.hunt:
+        hunt_endpoints(sess, args.fund, r.text)
 
 
 if __name__ == "__main__":  # pragma: no cover
