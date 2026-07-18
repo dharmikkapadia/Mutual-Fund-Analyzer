@@ -234,6 +234,30 @@ class VRSession:
         except requests.RequestException:
             return False
 
+    def verify(self) -> tuple[bool, str]:
+        """One cheap round-trip to confirm VR accepts this session at all.
+
+        Catches the two common failure modes before a full fetch run: a
+        stale pasted cookie (Cloudflare clearance expires within ~30
+        minutes) and requests coming from a cloud server IP, which VR's
+        bot protection refuses regardless of the cookie."""
+        try:
+            r = self.s.get(VR_BASE + "/", timeout=TIMEOUT)
+        except requests.RequestException as e:
+            return False, f"Could not reach Value Research: {e}"
+        if r.status_code in (403, 503):
+            return False, (
+                f"VR refused the request (HTTP {r.status_code}) — bot "
+                "protection. A pasted cookie is tied to your browser's "
+                "network and its Cloudflare clearance expires within about "
+                "30 minutes: copy a **fresh** Cookie header and reconnect. "
+                "Also note VR blocks requests from cloud servers — if this "
+                "app is running on a cloud host, fetching only works from "
+                "an app run on your own machine.")
+        if not r.ok:
+            return False, f"VR returned HTTP {r.status_code}."
+        return True, "ok"
+
     @staticmethod
     def _csrf_token(html: str) -> str | None:
         m = re.search(r'name=["\']csrfmiddlewaretoken["\']\s+value=["\']'

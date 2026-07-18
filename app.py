@@ -1807,6 +1807,13 @@ with tabs[9]:
                                  type="password", autocomplete="off")
         vr_cookie = st.text_input("…or paste a logged-in Cookie header",
                                   key="vr_cookie", type="password")
+        if store.BROWSER_ONLY:
+            st.warning(
+                "This looks like a **cloud deployment** — Value Research "
+                "blocks fetches from cloud-server IPs, so the Fetch button "
+                "will fail here. Run the app on your own machine for the "
+                "monthly fetch; manual entry, snapshots and the Excel "
+                "export all still work on this host.")
         cb1, cb2 = st.columns([1, 3])
         if cb1.button("Connect", type="primary", key="vr_connect"):
             try:
@@ -1816,9 +1823,14 @@ with tabs[9]:
                 else:
                     with st.spinner("Logging in to Value Research…"):
                         _s.login(vr_email.strip(), vr_pass)
-                st.session_state.vr_session = _s
-                sess = _s
-                st.success("Connected.")
+                with st.spinner("Verifying the session with VR…"):
+                    _ok, _why = _s.verify()
+                if _ok:
+                    st.session_state.vr_session = _s
+                    sess = _s
+                    st.success("Connected — VR accepts this session.")
+                else:
+                    st.error(_why)
             except V.VRError as e:
                 st.error(str(e))
         if sess is not None:
@@ -1885,6 +1897,7 @@ with tabs[9]:
         errs, notes = [], []
         prog = st.progress(0.0, text="Fetching from Value Research…")
         todo = [c for c in codes if vr_urls.get(str(c))]
+        blocked_streak = 0
         for i, c in enumerate(todo):
             nm = name_of(universe, c)
             prog.progress((i + 1) / max(1, len(todo)), text=f"VR: {nm}")
@@ -1892,6 +1905,7 @@ with tabs[9]:
                 prm = sess.fetch_fund(vr_urls[str(c)])
                 fetched[str(c)] = {"row": P.params_to_row(prm),
                                    "as_of": prm.get("as_of")}
+                blocked_streak = 0
                 if prm.get("extra_sectors"):
                     ex = ", ".join(f"{k} {v:.2f}%" for k, v
                                    in prm["extra_sectors"].items())
@@ -1900,6 +1914,20 @@ with tabs[9]:
                     notes.append(f"{nm}: {prm['login_note']}")
             except Exception as e:  # noqa: BLE001
                 errs.append(f"{nm}: {e}")
+                # VR refusing one fund means it will refuse them all —
+                # stop instead of hammering a blocked session
+                if "403" in str(e) or "503" in str(e):
+                    blocked_streak += 1
+                    if blocked_streak >= 2:
+                        errs.append(
+                            "Stopped: VR is refusing every request. Copy a "
+                            "**fresh** Cookie header (the Cloudflare part "
+                            "expires within ~30 minutes) and reconnect — "
+                            "and if this app runs on a cloud host, fetch "
+                            "from a locally-run app instead.")
+                        break
+                else:
+                    blocked_streak = 0
         prog.empty()
         msgs = []
         skipped = len(codes) - len(todo)
