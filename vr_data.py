@@ -48,6 +48,13 @@ VR_API_PORTFOLIO = VR_BASE + "/api/funds/{id}/portfolio/"
 # portfolio-tab HTML fragments; their JS sends the fund's *short name*
 # (hidden input #fund_name) plus cat_id/tab/lang, per the site's bundles
 VR_TAB_SECTOR = VR_BASE + "/funds/sector-holdings-tab-data/"
+# candidate sources for the Concentration cards (portfolio P/E and P/B):
+# the fragments/JSON that fill the portfolio tab, most likely first
+VR_AGG_ENDPOINTS = (
+    VR_BASE + "/api/funds/port-aggregates-chart/",
+    VR_BASE + "/funds/top-holdings-tab-data/",
+    VR_BASE + "/funds/holding-tab-ajax-data/",
+)
 VR_LOGIN_PATHS = ("/login/", "/accounts/login/", "/membership/login/")
 # autocomplete endpoints seen on VR over time; tried in order
 VR_SEARCH_PATHS = (
@@ -306,13 +313,55 @@ class VRSession:
                     return p
         return None
 
+    def _tab_form(self, inputs: dict) -> dict | None:
+        fund_name = inputs.get("fund_name")
+        if not fund_name:
+            return None
+        return {"fund_name": fund_name, "fund_name1": "", "fund_name2": "",
+                "fund_name3": "", "fund_name4": "",
+                "cat_id": inputs.get("cat_id", ""),
+                "lang": inputs.get("lang_check", "en")}
+
+    def fetch_aggregates(self, inputs: dict,
+                         referer: str | None = None) -> dict | None:
+        """Portfolio P/E and P/B (the tab's Concentration cards), tried
+        against the endpoints that fill the portfolio tab — HTML fragments
+        and chart JSON alike. Returns parsed params or None."""
+        form = self._tab_form(inputs)
+        if form is None:
+            return None
+        for ep in VR_AGG_ENDPOINTS:
+            try:
+                time.sleep(0.8)
+                r = self.s.get(ep, params=form, timeout=TIMEOUT,
+                               headers={"Referer": referer or VR_BASE + "/",
+                                        "X-Requested-With": "XMLHttpRequest"})
+            except requests.RequestException:
+                continue
+            body = r.text or ""
+            if not r.ok or len(body) < 50:
+                continue
+            if ("json" in (r.headers.get("content-type") or "")
+                    or body.lstrip()[:1] in "[{"):
+                try:
+                    p = parse_portfolio_api(r.json())
+                except ValueError:
+                    continue
+            else:
+                p = parse_fund_page(body)
+            if p.get("pe") is not None or p.get("pb") is not None:
+                self.last_aggregates_html = body
+                p["agg_source"] = ep
+                return p
+        return None
+
     def fetch_fund(self, fund_ref: str) -> dict:
         """Canonical parameter dict for a fund page URL or numeric VR id.
 
         Order of sources: the portfolio API endpoint (the fund page is an
         AJAX-filled skeleton), then the page HTML for anything missed,
-        then the sector-holdings tab fragment for the sector table and
-        aggregate ratios the first two don't carry.
+        then the sector-holdings tab fragment for the sector table, then
+        the aggregate endpoints for portfolio P/E and P/B.
         """
         url = fund_url(fund_ref)
         fid = _fund_id(url)
@@ -331,8 +380,17 @@ class VRSession:
             page_p = parse_fund_page(r.text)
             page_p["url"] = r.url or url
             guest = _guest_flag(r.text)
-            frag_p = self.fetch_sector_fragment(_page_inputs(r.text),
+            inputs = _page_inputs(r.text)
+            frag_p = self.fetch_sector_fragment(inputs,
                                                 referer=r.url or url)
+            merged = _compose(api_p, page_p, frag_p, guest, url)
+            if merged.get("pe") is None and merged.get("pb") is None:
+                agg_p = self.fetch_aggregates(inputs, referer=r.url or url)
+                if agg_p is not None:
+                    for k in ("pe", "pb"):
+                        if merged.get(k) is None:
+                            merged[k] = agg_p.get(k)
+            return merged
         return _compose(api_p, page_p, frag_p, guest, url)
 
 
@@ -1062,9 +1120,15 @@ def _candidate_urls(sess: VRSession, fund_id: str, html: str,
 _TAB_ENDPOINTS = (
     "/funds/sector-holdings-tab-data/",
     "/funds/top-holdings-tab-data/",
+    "/funds/holding-tab-ajax-data/",
     "/funds/asset-allocation-tab-data/",
-    "/api/funds/asset-allocation-tab-data/",
+    "/api/funds/port-aggregates-chart/",
+    "/api/funds/sector-chart/",
+    "/api/funds/asset-allocation-chart/",
 )
+_CTX_RX = re.compile(r"port-aggregates-chart|sector-chart|"
+                     r"asset-allocation-chart|holding-tab-ajax|"
+                     r"top-holdings-tab")
 
 
 def hunt_tab_data(sess: VRSession, fund_id: str, texts: list[str],
@@ -1083,6 +1147,21 @@ def hunt_tab_data(sess: VRSession, fund_id: str, texts: list[str],
     if not urls:
         print("  (none found)")
 
+    print("\n-- JS context around the chart/tab calls --")
+    seen = set()
+    for t in texts:
+        for m in _CTX_RX.finditer(t):
+            seg = re.sub(r"\s+", " ", t[max(0, m.start() - 200):
+                                        m.start() + 200])
+            key = seg[80:150]
+            if key not in seen:
+                seen.add(key)
+                print("  …" + seg + "…")
+            if len(seen) >= 10:
+                break
+        if len(seen) >= 10:
+            break
+
     inputs = _page_inputs(page_html)
     fund_name = inputs.get("fund_name", "")
     cat_id = inputs.get("cat_id", "")
@@ -1099,7 +1178,7 @@ def hunt_tab_data(sess: VRSession, fund_id: str, texts: list[str],
     print("\n-- probing tab endpoints with the page's own params --")
     n_saved = 0
     for ep in _TAB_ENDPOINTS:
-        for tab in (None, "equity", "sector"):
+        for tab in (None, "equity"):
             form = dict(base) if tab is None else dict(base, tab=tab)
             time.sleep(0.7)
             try:
@@ -1113,20 +1192,21 @@ def hunt_tab_data(sess: VRSession, fund_id: str, texts: list[str],
                          if w in low]
                 line = (f"GET  {r.status_code} {len(body):>8,}B {ep} "
                         f"tab={tab!r}")
-                if r.ok and len(body) > 400 and marks:
+                if r.ok and 200 < len(body) < 100_000:
                     n_saved += 1
+                    ext = "json" if body.lstrip()[:1] in "[{" else "html"
                     frag = Path(__file__).with_name(
-                        f"vr_frag_{n_saved}.html")
+                        f"vr_frag_{n_saved}.{ext}")
                     frag.write_text(body, encoding="utf-8")
-                    line += (f"   <-- markers: {','.join(marks)} "
-                             f"saved: {frag.name}")
+                    line += f"   saved: {frag.name}"
+                    if marks:
+                        line += f"   <-- markers: {','.join(marks)}"
                 print(line)
             except requests.RequestException as e:
                 print(f"GET  ERR {type(e).__name__} {ep} tab={tab!r}")
     if n_saved:
-        print(f"\n{n_saved} fragment(s) saved next to vr_data.py — upload "
-              "them for parser fixes if the parse output above is missing "
-              "fields")
+        print(f"\n{n_saved} response(s) saved next to vr_data.py — zip and "
+              "upload them if P/E and P/B are still missing above")
 
 
 def hunt_endpoints(sess: VRSession, fund_ref: str, html: str) -> None:
@@ -1237,8 +1317,27 @@ def _main() -> None:  # pragma: no cover
         print("sector-tab fragment: nothing usable"
               + (" (raw response saved above — upload it)" if raw_frag
                  else ""))
+
+    merged = _compose(api_p, page_p, frag_p, guest, url)
+    if merged.get("pe") is None and merged.get("pb") is None:
+        agg_p = sess.fetch_aggregates(_page_inputs(r.text),
+                                      referer=r.url or url)
+        raw_agg = getattr(sess, "last_aggregates_html", None)
+        if raw_agg:
+            adump = Path(__file__).with_name("vr_aggregates_dump.txt")
+            adump.write_text(raw_agg, encoding="utf-8")
+            print(f"aggregates response ({len(raw_agg):,} bytes) -> {adump}")
+        if agg_p is not None:
+            print(f"-- P/E, P/B found via {agg_p.get('agg_source')} --")
+            for k in ("pe", "pb"):
+                if merged.get(k) is None:
+                    merged[k] = agg_p.get(k)
+        else:
+            print("aggregates (P/E, P/B): not found in the candidate "
+                  "endpoints — run with --hunt and upload the saved "
+                  "responses")
     print("-- merged (what the app will use) --")
-    print(json.dumps(_compose(api_p, page_p, frag_p, guest, url), indent=2))
+    print(json.dumps(merged, indent=2))
     if args.hunt:
         hunt_endpoints(sess, args.fund, r.text)
 
