@@ -139,6 +139,19 @@ def snapshots_from_json(raw: str) -> dict:
         return {}
 
 
+def summary_history(snaps: dict) -> pd.DataFrame:
+    """Weighted-aggregate history: one row per saved month, sorted by
+    month key — the data behind the month-over-month trend charts."""
+    recs = {}
+    for mk in sorted(snaps):
+        rows = snapshot_rows(snaps[mk])
+        if rows:
+            recs[mk] = weighted_summary(review_frame(rows))
+    df = pd.DataFrame(recs).T
+    df.index.name = "Month"
+    return df
+
+
 # --------------------------------------------------------------------------- #
 # Workbook import — a manually maintained review .xlsx becomes a snapshot
 # --------------------------------------------------------------------------- #

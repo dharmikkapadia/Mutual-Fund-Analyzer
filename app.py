@@ -2151,6 +2151,98 @@ with tabs[9]:
                     a, b = cdf.index[0], cdf.index[1]
                     cdf.loc[f"Δ {b} vs {a}"] = cdf.loc[b] - cdf.loc[a]
                 table(cdf.reset_index(names="Month"))
+        hist = P.summary_history(pf_snaps)
+        if len(hist) >= 2:
+            section("Trends across months")
+            hx = list(hist.index)
+
+            # valuation & size — one measure per chart, never a dual axis
+            t1, t2, t3 = st.columns(3)
+            for col_st, title, series, fmt in (
+                    (t1, "Weighted P/E", hist["P/E"], ".2f"),
+                    (t2, "Weighted P/B", hist["P/B"], ".2f"),
+                    (t3, "Total value (₹)", hist["Value"], ",.0f")):
+                with col_st:
+                    st.caption(title)
+                    lfig = go.Figure(go.Scatter(
+                        x=hx, y=series.values, mode="lines+markers",
+                        line=dict(color=ACCENT, width=2),
+                        marker=dict(size=8, color=ACCENT),
+                        hovertemplate="%{x}: %{y:" + fmt + "}"
+                                      "<extra></extra>"))
+                    tv(lfig, 190, unified=False)
+                    lfig.update_xaxes(type="category")
+                    chart(lfig)
+
+            # cap-mix drift — same colour-per-bucket as the mix bar above
+            mfig = go.Figure()
+            for lbl, coln, colr in (("Large", "Large Stocks", ACCENT),
+                                    ("Mid", "Mid cap Stocks", SERIES[1]),
+                                    ("Small", "Small cap Stocks",
+                                     SERIES[3]),
+                                    ("Debt & Cash", "Debt & Cash", MUTED)):
+                mfig.add_trace(go.Bar(
+                    x=hx, y=hist[coln].values, name=lbl, marker_color=colr,
+                    hovertemplate=lbl + " · %{x}: %{y:.2f}%"
+                                  "<extra></extra>"))
+            mfig.update_layout(barmode="stack")
+            tv(mfig, 280, legend=True, unified=False, spikes=False)
+            mfig.update_xaxes(type="category")
+            mfig.update_yaxes(ticksuffix="%")
+            chart(mfig)
+            st.caption("Market-cap mix over time — the style-drift view: "
+                       "watch Small grow or Debt & Cash build up.")
+
+            # sector rotation — magnitude job, single-hue heatmap
+            sect_hist = hist[P.SECTOR_COLS].astype(float).fillna(0.0)
+            keep = [c for c in P.SECTOR_COLS
+                    if sect_hist[c].abs().max() > 0.005]
+            keep.sort(key=lambda c: sect_hist[c].iloc[-1], reverse=True)
+            if keep:
+                hfig = go.Figure(go.Heatmap(
+                    z=[sect_hist[c].values for c in reversed(keep)],
+                    x=hx, y=list(reversed(keep)),
+                    colorscale=OV_SCALE, showscale=False,
+                    texttemplate="%{z:.1f}",
+                    textfont=dict(size=11, color=TEXT), xgap=2, ygap=2,
+                    hovertemplate="%{y} · %{x}: %{z:.2f}%<extra></extra>"))
+                tv(hfig, max(240, 60 + 24 * len(keep)), unified=False,
+                   spikes=False)
+                hfig.update_xaxes(type="category", showgrid=False)
+                hfig.update_yaxes(side="left", showgrid=False)
+                chart(hfig)
+                st.caption("Sector weights by month (% of portfolio, "
+                           "sorted by the latest month) — darker = "
+                           "heavier; read along a row to see rotation.")
+
+                dc1, dc2 = st.columns([1.4, 2.6])
+                base_pick = dc1.selectbox(
+                    f"Sector change: {hx[-1]} vs", hx[:-1],
+                    index=len(hx) - 2, key="pf_delta_base")
+                delta = (sect_hist.iloc[-1]
+                         - sect_hist.loc[base_pick])[keep].round(2)
+                delta = delta[delta.abs() >= 0.01].sort_values()
+                if delta.empty:
+                    dc2.caption("No sector moved by 0.01% or more "
+                                "between those months.")
+                else:
+                    dfig = go.Figure(go.Bar(
+                        x=delta.values, y=delta.index, orientation="h",
+                        marker_color=[UP if v > 0 else DOWN
+                                      for v in delta.values],
+                        hovertemplate="%{y}: %{x:+.2f} pp"
+                                      "<extra></extra>"))
+                    tv(dfig, max(200, 40 + 24 * len(delta)),
+                       unified=False, spikes=False)
+                    dfig.update_xaxes(ticksuffix=" pp", zeroline=True,
+                                      zerolinecolor=GRID)
+                    dfig.add_vline(x=0, line_color=GRID)
+                    chart(dfig)
+                    st.caption(f"Where the portfolio rotated between "
+                               f"{base_pick} and {hx[-1]} — green gained "
+                               "weight, red gave it up (percentage "
+                               "points).")
+
         mc1, mc2 = st.columns([1.2, 1])
         load_pick = mc1.selectbox("Load a snapshot into the grid", months,
                                   key="pf_load_pick")
