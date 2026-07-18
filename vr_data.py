@@ -667,16 +667,48 @@ def _apply_allocations(params: dict, caps: dict, equity, debt, cash,
 # --------------------------------------------------------------------------- #
 _HOLDING_KEYS = {"company", "company_name", "compname", "stock", "stock_name",
                  "isin", "holding_name", "market_value", "no_of_shares"}
-_LABEL_FIELDS = ("name", "label", "title", "sector_name", "sector",
+_LABEL_FIELDS = ("name", "label", "info", "title", "sector_name", "sector",
                  "asset_type", "type", "category", "x")
 _VALUE_FIELDS = ("value", "y", "percentage", "percent", "pct", "weight",
-                 "allocation", "corpus_per", "holding")
+                 "allocation", "corpus_per", "holding", "fund", "data")
 _ASSET_LABELS = {"equity", "debt", "cash", "cash & cash eq", "real estate",
                  "others", "other"}
 
 
 def _key_norm(k) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(k).lower()).strip("_")
+
+
+def _val(x):
+    """_to_float that also unwraps single-element lists (VR graph series
+    put the value in `data: [94.04]`); multi-element lists stay None."""
+    if isinstance(x, list):
+        x = x[0] if len(x) == 1 else None
+    return _to_float(x)
+
+
+def _is_holding_dict(d: dict) -> bool:
+    """Holdings rows carry company keys or link to /stocks/ pages."""
+    if _HOLDING_KEYS & {_key_norm(k) for k in d}:
+        return True
+    return any(isinstance(v, str) and "/stocks/" in v for v in d.values())
+
+
+def _decimal_places(mapped: dict) -> int:
+    total = 0
+    for v in mapped.values():
+        s = f"{float(v):g}"
+        total += len(s.split(".")[1]) if "." in s else 0
+    return total
+
+
+def _better(new: dict, cur: dict) -> bool:
+    """Bigger group wins; on a size tie, the higher-precision one does
+    (VR ships the same allocation twice — a 1-dp table and a full-
+    precision graph series)."""
+    if len(new) != len(cur):
+        return len(new) > len(cur)
+    return _decimal_places(new) > _decimal_places(cur)
 
 
 def _json_lists(obj):
@@ -694,20 +726,19 @@ def _json_lists(obj):
 def _list_pairs(lst: list) -> list[tuple[str, float]]:
     """(label, value) pairs from a list of dicts, or [] if it doesn't have
     a consistent label+value shape (or looks like a holdings list)."""
-    for item in lst:
-        if _HOLDING_KEYS & {_key_norm(k) for k in item}:
-            return []
+    if any(_is_holding_dict(i) for i in lst):
+        return []
     lf = next((f for f in _LABEL_FIELDS
                if sum(isinstance(i.get(f), str) and i.get(f).strip() != ""
                       for i in lst) >= max(1, len(lst) - 1)), None)
     vf = next((f for f in _VALUE_FIELDS
-               if sum(_to_float(i.get(f)) is not None for i in lst)
+               if sum(_val(i.get(f)) is not None for i in lst)
                >= max(1, len(lst) - 1)), None)
     if lf is None or vf is None:
         return []
     out = []
     for i in lst:
-        v = _to_float(i.get(vf))
+        v = _val(i.get(vf))
         if isinstance(i.get(lf), str) and v is not None and 0 <= v <= 100:
             out.append((i[lf].strip(), v))
     return out
@@ -772,9 +803,36 @@ def parse_portfolio_api(js) -> dict:
     """
     params = blank_params()
 
-    # scalar stats — prefer explicitly portfolio-scoped keys
+    # titled stats — VR's {'title'/'name': 'Assets', 'data': '1,06,496'}
+    # rows (the More Details grid, and the aggregates tabs use the same
+    # shape for 'Portfolio P/E Ratio' etc.)
+    for d in _walk_dicts(js):
+        if _is_holding_dict(d):
+            continue
+        label = next((d[k] for k in ("title", "heading", "name")
+                      if isinstance(d.get(k), str)), None)
+        if not label:
+            continue
+        v = _val(next((d[k] for k in ("data", "value", "data_fmt")
+                       if d.get(k) is not None), None))
+        if v is None:
+            continue
+        low = label.lower()
+        if params["pe"] is None and re.search(r"p/?e\s*ratio", low):
+            params["pe"] = v
+        elif params["pb"] is None and re.search(r"p/?b\s*ratio", low):
+            params["pb"] = v
+        elif params["aum_cr"] is None and re.search(
+                r"^assets?$|fund\s*size|\baum\b", low):
+            params["aum_cr"] = v
+
+    # scalar stats by key — prefer explicitly portfolio-scoped keys;
+    # holdings rows are skipped so a stock's figures can't be mistaken
+    # for the fund's
     for want_portfolio in (True, False):
         for d in _walk_dicts(js):
+            if _is_holding_dict(d):
+                continue
             for k, v in d.items():
                 key = _key_norm(k)
                 if want_portfolio and "portfolio" not in key:
@@ -788,13 +846,25 @@ def parse_portfolio_api(js) -> dict:
                             r"(^|_)p_?b(_ratio)?$|price_(to_)?book", key):
                         params["pb"] = fv
                     elif params["aum_cr"] is None and re.search(
-                            r"(^|_)aum($|_)|fund_size|net_assets", key):
+                            r"(^|_)aum($|_)|fund_size", key):
                         params["aum_cr"] = fv
-                if (params["as_of"] is None and isinstance(v, str)
-                        and re.search(r"(^|_)(as_?on(_date)?|portfolio_date"
-                                      r"|report_date|month_end)", key)
-                        and re.search(r"\d", v)):
-                    params["as_of"] = v.strip()
+
+    # as-on date: the portfolio tabs' 'as_on_date_fmt' is authoritative
+    # ('as on 30 Jun, 2026'); other as_on keys (NAV, consistency score)
+    # are only a fallback
+    for keys in (("as_on_date_fmt",),
+                 ("as_on_date", "as_on", "portfolio_date", "report_date")):
+        if params["as_of"] is not None:
+            break
+        for d in _walk_dicts(js):
+            for k in keys:
+                v = d.get(k)
+                if isinstance(v, str) and re.search(r"\d", v):
+                    params["as_of"] = re.sub(r"(?i)^\s*as\s+on\s+", "",
+                                             v).strip()
+                    break
+            if params["as_of"] is not None:
+                break
 
     caps, assets, sectors, extra = {}, {}, {}, {}
     for lst in _json_lists(js):
@@ -802,11 +872,11 @@ def parse_portfolio_api(js) -> dict:
         if not pairs:
             continue
         kind, mapped, ex = _classify_pairs(pairs)
-        if kind == "caps" and len(mapped) > len(caps):
+        if kind == "caps" and _better(mapped, caps):
             caps = mapped
-        elif kind == "assets" and len(mapped) > len(assets):
+        elif kind == "assets" and _better(mapped, assets):
             assets = mapped
-        elif kind == "sectors" and len(mapped) > len(sectors):
+        elif kind == "sectors" and _better(mapped, sectors):
             sectors, extra = mapped, ex
 
     # dict-shaped allocations ({'large': 76.75, ...} / {'equity': 94.04})
@@ -816,11 +886,11 @@ def parse_portfolio_api(js) -> dict:
         if len(pairs) < 2:
             continue
         kind, mapped, ex = _classify_pairs(pairs)
-        if kind == "caps" and len(mapped) > len(caps):
+        if kind == "caps" and _better(mapped, caps):
             caps = mapped
-        elif kind == "assets" and len(mapped) > len(assets):
+        elif kind == "assets" and _better(mapped, assets):
             assets = mapped
-        elif kind == "sectors" and len(mapped) > len(sectors):
+        elif kind == "sectors" and _better(mapped, sectors):
             sectors, extra = mapped, ex
 
     equity = assets.get("equity")
@@ -868,9 +938,8 @@ _HUNT_WORDS = ("portfolio", "sector", "holding", "aggregate", "asset",
 _MARKERS = ("p/e", "p/b", "sector", "financial", "large", "equity")
 
 
-def _candidate_urls(sess: VRSession, fund_id: str, html: str) -> list[str]:
-    """URL-ish strings mentioning portfolio-ish words, from the page's
-    inline scripts and its same-domain JS bundles, plus educated guesses."""
+def _bundle_texts(sess: VRSession, html: str) -> list[str]:
+    """The page HTML plus the bodies of its same-domain JS bundles."""
     texts = [html or ""]
     if BeautifulSoup is not None:
         soup = BeautifulSoup(html or "", "lxml")
@@ -885,6 +954,14 @@ def _candidate_urls(sess: VRSession, fund_id: str, html: str) -> list[str]:
                     texts.append(b.text)
             except requests.RequestException:
                 pass
+    return texts
+
+
+def _candidate_urls(sess: VRSession, fund_id: str, html: str,
+                    texts: list[str] | None = None) -> list[str]:
+    """URL-ish strings mentioning portfolio-ish words, from the page's
+    inline scripts and its same-domain JS bundles, plus educated guesses."""
+    texts = texts if texts is not None else _bundle_texts(sess, html)
     found = set()
     rx = re.compile(r"""["']((?:https?://[^"']+|/[A-Za-z0-9_\-/{}$.]+))["']""")
     for t in texts:
@@ -907,10 +984,85 @@ def _candidate_urls(sess: VRSession, fund_id: str, html: str) -> list[str]:
     return sorted(found)[:30]
 
 
+_TAB_ENDPOINTS = (
+    "/funds/sector-holdings-tab-data/",
+    "/funds/top-holdings-tab-data/",
+    "/funds/holding-tab-ajax-data/",
+    "/funds/asset-allocation-tab-data/",
+    "/funds/portfolio-aggregates-tab-data/",
+    "/api/funds/asset-allocation-tab-data/",
+    "/api/funds/sector-holdings-tab-data/",
+)
+
+
+def hunt_tab_data(sess: VRSession, fund_id: str,
+                  texts: list[str]) -> None:
+    """Crack the parameterless tab endpoints: show how the site's JS calls
+    them, then brute-force plausible param sets over GET and POST."""
+    print("\n-- JS context around 'tab-data' calls --")
+    seen = set()
+    for t in texts:
+        for m in re.finditer(r"tab-data", t):
+            seg = re.sub(r"\s+", " ", t[max(0, m.start() - 180):
+                                        m.start() + 180])
+            key = seg[60:120]
+            if key not in seen:
+                seen.add(key)
+                print("  …" + seg + "…")
+            if len(seen) >= 12:
+                break
+        if len(seen) >= 12:
+            break
+    if not seen:
+        print("  (none found in page/bundles)")
+
+    param_sets = [
+        {"plan_id": fund_id},
+        {"sub_plan_code": f"{fund_id}_01"},
+        {"plan_id": fund_id, "sub_plan_code": f"{fund_id}_01",
+         "inv_sub_plan_code": f"{fund_id}_01"},
+    ]
+    print("\n-- probing tab endpoints with params --")
+    interesting = []
+    for ep in _TAB_ENDPOINTS:
+        for ps in param_sets:
+            for method in ("GET", "POST"):
+                time.sleep(0.7)
+                try:
+                    r = sess.s.request(
+                        method, VR_BASE + ep,
+                        params=ps if method == "GET" else None,
+                        data=ps if method == "POST" else None,
+                        timeout=TIMEOUT,
+                        headers={"Referer": VR_BASE + "/",
+                                 "X-Requested-With": "XMLHttpRequest"})
+                    body = r.text or ""
+                    low = body.lower()
+                    marks = [w for w in ("p/e", "p/b", "sector_wise",
+                                         "financial", "portfolio p")
+                             if w in low]
+                    tag = f" <-- markers: {','.join(marks)}" if (
+                        r.ok and marks and len(body) > 300) else ""
+                    print(f"{method:4} {r.status_code} {len(body):>8,}B "
+                          f"{ep} {ps}{tag}")
+                    if tag:
+                        interesting.append((method, ep, ps))
+                        print("      preview:",
+                              re.sub(r"\s+", " ", body[:240]))
+                except requests.RequestException as e:
+                    print(f"{method:4} ERR {type(e).__name__} {ep} {ps}")
+    print("\ntab-data hits:" if interesting else
+          "\nno tab-data hit — the JS context above should show the real "
+          "params; send the output back")
+    for method, ep, ps in interesting:
+        print(f"  {method} {ep} {ps}")
+
+
 def hunt_endpoints(sess: VRSession, fund_ref: str, html: str) -> None:
     m = re.search(r"(\d{3,6})", str(fund_ref))
     fund_id = m.group(1) if m else str(fund_ref)
-    cands = _candidate_urls(sess, fund_id, html)
+    texts = _bundle_texts(sess, html)
+    cands = _candidate_urls(sess, fund_id, html, texts)
     print(f"\n-- probing {len(cands)} candidate endpoints --")
     hits = []
     for u in cands:
@@ -935,6 +1087,7 @@ def hunt_endpoints(sess: VRSession, fund_ref: str, html: str) -> None:
           "\nno endpoint hit — send vr_page_dump.html for analysis")
     for u in hits:
         print(" ", u)
+    hunt_tab_data(sess, fund_id, texts)
 
 
 # --------------------------------------------------------------------------- #
