@@ -45,6 +45,9 @@ VR_BASE = "https://www.valueresearchonline.com"
 # fund-specific portfolio JSON (confirmed live July 2026) — the fund page
 # itself is only a skeleton that this endpoint fills in via AJAX
 VR_API_PORTFOLIO = VR_BASE + "/api/funds/{id}/portfolio/"
+# portfolio-tab HTML fragments; their JS sends the fund's *short name*
+# (hidden input #fund_name) plus cat_id/tab/lang, per the site's bundles
+VR_TAB_SECTOR = VR_BASE + "/funds/sector-holdings-tab-data/"
 VR_LOGIN_PATHS = ("/login/", "/accounts/login/", "/membership/login/")
 # autocomplete endpoints seen on VR over time; tried in order
 VR_SEARCH_PATHS = (
@@ -276,12 +279,40 @@ class VRSession:
             pass
         return None
 
+    def fetch_sector_fragment(self, inputs: dict,
+                              referer: str | None = None) -> dict | None:
+        """Parse the sector-holdings tab fragment (needs the page's hidden
+        inputs). Returns parsed params, or None when nothing usable."""
+        fund_name = inputs.get("fund_name")
+        if not fund_name:
+            return None
+        base = {"fund_name": fund_name, "fund_name1": "", "fund_name2": "",
+                "fund_name3": "", "fund_name4": "",
+                "cat_id": inputs.get("cat_id", ""),
+                "lang": inputs.get("lang_check", "en")}
+        for tab in ("equity", "sector", None):
+            form = dict(base) if tab is None else dict(base, tab=tab)
+            try:
+                time.sleep(REQUEST_DELAY)
+                r = self.s.get(VR_TAB_SECTOR, params=form, timeout=TIMEOUT,
+                               headers={"Referer": referer or VR_BASE + "/",
+                                        "X-Requested-With": "XMLHttpRequest"})
+            except requests.RequestException:
+                continue
+            if r.ok and len(r.text or "") > 400 and "sector" in r.text.lower():
+                self.last_fragment_html = r.text     # kept for diagnostics
+                p = parse_fund_page(r.text)
+                if p["sectors"] or p["pe"] is not None:
+                    return p
+        return None
+
     def fetch_fund(self, fund_ref: str) -> dict:
         """Canonical parameter dict for a fund page URL or numeric VR id.
 
-        The portfolio API endpoint is the primary source (the fund page is
-        an AJAX-filled skeleton); the page HTML is fetched only to fill
-        fields the API parse missed.
+        Order of sources: the portfolio API endpoint (the fund page is an
+        AJAX-filled skeleton), then the page HTML for anything missed,
+        then the sector-holdings tab fragment for the sector table and
+        aggregate ratios the first two don't carry.
         """
         url = fund_url(fund_ref)
         fid = _fund_id(url)
@@ -290,7 +321,7 @@ class VRSession:
             js = self.fetch_portfolio_json(fid, referer=url)
             if js is not None:
                 api_p = parse_portfolio_api(js)
-        page_p = None
+        page_p, frag_p, guest = None, None, None
         if _needs_page(api_p):
             time.sleep(REQUEST_DELAY)
             r = self.get(url)
@@ -299,7 +330,10 @@ class VRSession:
                               "session isn't (or is no longer) logged in.")
             page_p = parse_fund_page(r.text)
             page_p["url"] = r.url or url
-        return _merge_params(api_p, page_p, url)
+            guest = _guest_flag(r.text)
+            frag_p = self.fetch_sector_fragment(_page_inputs(r.text),
+                                                referer=r.url or url)
+        return _compose(api_p, page_p, frag_p, guest, url)
 
 
 def fund_url(fund_ref: str) -> str:
@@ -319,6 +353,25 @@ def _is_login_wall(html: str) -> bool:
     has_login = ("csrfmiddlewaretoken" in low
                  and ('type="password"' in low or "type='password'" in low))
     return has_login and "sector" not in low
+
+
+def _page_inputs(html: str) -> dict:
+    """id -> value of the page's hidden inputs (fund_name, cat_id, …)."""
+    out = {}
+    for m in re.finditer(r"<input[^>]*type=['\"]hidden['\"][^>]*>",
+                         html or ""):
+        tag = m.group(0)
+        idm = re.search(r"id=['\"]([^'\"]+)['\"]", tag)
+        vm = re.search(r"value=['\"]([^'\"]*)['\"]", tag)
+        if idm and idm.group(1) not in out:
+            out[idm.group(1)] = vm.group(1) if vm else ""
+    return out
+
+
+def _guest_flag(html: str) -> str | None:
+    """'1' when VR's own page says this session is a guest, '0' when
+    logged in, None when the page doesn't say."""
+    return _page_inputs(html).get("is_guest_user")
 
 
 def _parse_search_results(body: str, content_type: str | None
@@ -930,6 +983,28 @@ def _needs_page(p: dict | None) -> bool:
                    ("pe", "pb", "aum_cr", "large", "debt_cash")))
 
 
+def _compose(api_p: dict | None, page_p: dict | None, frag_p: dict | None,
+             guest: str | None, url: str) -> dict:
+    """Final parameter set: API + page fill-ins, with the sector-tab
+    fragment overriding — the portfolio tab is the ground truth the
+    manual review copies from (and carries full precision, e.g. 76.75
+    where the overview API says 76.8)."""
+    merged = _merge_params(api_p, page_p, url)
+    if frag_p is not None:
+        for k in ("pe", "pb", "large", "mid", "small", "debt_cash",
+                  "as_of"):
+            if frag_p.get(k) is not None:
+                merged[k] = frag_p[k]
+        if frag_p.get("sectors"):
+            merged["sectors"] = frag_p["sectors"]
+            merged["extra_sectors"] = frag_p.get("extra_sectors") or {}
+    if not merged.get("sectors") and guest == "1":
+        merged["login_note"] = (
+            "VR treated this session as a guest — the portfolio tab data "
+            "may be withheld. Try the cookie-paste login.")
+    return merged
+
+
 # --------------------------------------------------------------------------- #
 # Endpoint hunting — find where the page's JS loads the portfolio data from
 # --------------------------------------------------------------------------- #
@@ -987,75 +1062,71 @@ def _candidate_urls(sess: VRSession, fund_id: str, html: str,
 _TAB_ENDPOINTS = (
     "/funds/sector-holdings-tab-data/",
     "/funds/top-holdings-tab-data/",
-    "/funds/holding-tab-ajax-data/",
     "/funds/asset-allocation-tab-data/",
-    "/funds/portfolio-aggregates-tab-data/",
     "/api/funds/asset-allocation-tab-data/",
-    "/api/funds/sector-holdings-tab-data/",
 )
 
 
-def hunt_tab_data(sess: VRSession, fund_id: str,
-                  texts: list[str]) -> None:
-    """Crack the parameterless tab endpoints: show how the site's JS calls
-    them, then brute-force plausible param sets over GET and POST."""
-    print("\n-- JS context around 'tab-data' calls --")
-    seen = set()
-    for t in texts:
-        for m in re.finditer(r"tab-data", t):
-            seg = re.sub(r"\s+", " ", t[max(0, m.start() - 180):
-                                        m.start() + 180])
-            key = seg[60:120]
-            if key not in seen:
-                seen.add(key)
-                print("  …" + seg + "…")
-            if len(seen) >= 12:
-                break
-        if len(seen) >= 12:
-            break
-    if not seen:
-        print("  (none found in page/bundles)")
+def hunt_tab_data(sess: VRSession, fund_id: str, texts: list[str],
+                  page_html: str) -> None:
+    """Probe the tab endpoints the way the site's own JS does: with the
+    fund's short name and cat_id from the page's hidden inputs. Also dump
+    every AJAX url the bundles reference, so nothing stays hidden."""
+    from pathlib import Path
 
-    param_sets = [
-        {"plan_id": fund_id},
-        {"sub_plan_code": f"{fund_id}_01"},
-        {"plan_id": fund_id, "sub_plan_code": f"{fund_id}_01",
-         "inv_sub_plan_code": f"{fund_id}_01"},
-    ]
-    print("\n-- probing tab endpoints with params --")
-    interesting = []
+    print("\n-- all ajax urls referenced by the page's JS bundles --")
+    urls = set()
+    for t in texts:
+        urls.update(re.findall(r"""url\s*:\s*['"]([^'"]+)['"]""", t))
+    for u in sorted(urls)[:80]:
+        print("  ", u)
+    if not urls:
+        print("  (none found)")
+
+    inputs = _page_inputs(page_html)
+    fund_name = inputs.get("fund_name", "")
+    cat_id = inputs.get("cat_id", "")
+    print(f"\npage hidden inputs: fund_name={fund_name!r} cat_id={cat_id!r} "
+          f"is_guest_user={inputs.get('is_guest_user')!r} "
+          f"is_premium={inputs.get('is_premium_user_top')!r}")
+    if not fund_name:
+        print("no #fund_name on the page — cannot probe tab endpoints")
+        return
+
+    base = {"fund_name": fund_name, "fund_name1": "", "fund_name2": "",
+            "fund_name3": "", "fund_name4": "", "cat_id": cat_id,
+            "lang": inputs.get("lang_check", "en")}
+    print("\n-- probing tab endpoints with the page's own params --")
+    n_saved = 0
     for ep in _TAB_ENDPOINTS:
-        for ps in param_sets:
-            for method in ("GET", "POST"):
-                time.sleep(0.7)
-                try:
-                    r = sess.s.request(
-                        method, VR_BASE + ep,
-                        params=ps if method == "GET" else None,
-                        data=ps if method == "POST" else None,
-                        timeout=TIMEOUT,
-                        headers={"Referer": VR_BASE + "/",
-                                 "X-Requested-With": "XMLHttpRequest"})
-                    body = r.text or ""
-                    low = body.lower()
-                    marks = [w for w in ("p/e", "p/b", "sector_wise",
-                                         "financial", "portfolio p")
-                             if w in low]
-                    tag = f" <-- markers: {','.join(marks)}" if (
-                        r.ok and marks and len(body) > 300) else ""
-                    print(f"{method:4} {r.status_code} {len(body):>8,}B "
-                          f"{ep} {ps}{tag}")
-                    if tag:
-                        interesting.append((method, ep, ps))
-                        print("      preview:",
-                              re.sub(r"\s+", " ", body[:240]))
-                except requests.RequestException as e:
-                    print(f"{method:4} ERR {type(e).__name__} {ep} {ps}")
-    print("\ntab-data hits:" if interesting else
-          "\nno tab-data hit — the JS context above should show the real "
-          "params; send the output back")
-    for method, ep, ps in interesting:
-        print(f"  {method} {ep} {ps}")
+        for tab in (None, "equity", "sector"):
+            form = dict(base) if tab is None else dict(base, tab=tab)
+            time.sleep(0.7)
+            try:
+                r = sess.s.get(VR_BASE + ep, params=form, timeout=TIMEOUT,
+                               headers={"Referer": VR_BASE + "/",
+                                        "X-Requested-With": "XMLHttpRequest"})
+                body = r.text or ""
+                low = body.lower()
+                marks = [w for w in ("p/e", "p/b", "sector_wise",
+                                     "financial", "portfolio p", "equity")
+                         if w in low]
+                line = (f"GET  {r.status_code} {len(body):>8,}B {ep} "
+                        f"tab={tab!r}")
+                if r.ok and len(body) > 400 and marks:
+                    n_saved += 1
+                    frag = Path(__file__).with_name(
+                        f"vr_frag_{n_saved}.html")
+                    frag.write_text(body, encoding="utf-8")
+                    line += (f"   <-- markers: {','.join(marks)} "
+                             f"saved: {frag.name}")
+                print(line)
+            except requests.RequestException as e:
+                print(f"GET  ERR {type(e).__name__} {ep} tab={tab!r}")
+    if n_saved:
+        print(f"\n{n_saved} fragment(s) saved next to vr_data.py — upload "
+              "them for parser fixes if the parse output above is missing "
+              "fields")
 
 
 def hunt_endpoints(sess: VRSession, fund_ref: str, html: str) -> None:
@@ -1087,7 +1158,7 @@ def hunt_endpoints(sess: VRSession, fund_ref: str, html: str) -> None:
           "\nno endpoint hit — send vr_page_dump.html for analysis")
     for u in hits:
         print(" ", u)
-    hunt_tab_data(sess, fund_id, texts)
+    hunt_tab_data(sess, fund_id, texts, html)
 
 
 # --------------------------------------------------------------------------- #
@@ -1135,12 +1206,32 @@ def _main() -> None:  # pragma: no cover
     print(f"fetched {r.url} ({len(r.text):,} bytes) -> {dump}")
     if _is_login_wall(r.text):
         print("WARNING: page looks like a login wall")
+    guest = _guest_flag(r.text)
+    if guest is not None:
+        print("VR session state on this page: "
+              + ("GUEST — portfolio tab data may be withheld; consider "
+                 "--cookie" if guest == "1" else "logged in"))
     page_p = parse_fund_page(r.text)
     page_p["url"] = r.url
     print("-- parsed from page HTML --")
     print(json.dumps(page_p, indent=2))
+
+    frag_p = sess.fetch_sector_fragment(_page_inputs(r.text),
+                                        referer=r.url or url)
+    raw_frag = getattr(sess, "last_fragment_html", None)
+    if raw_frag:
+        fdump = Path(__file__).with_name("vr_sector_fragment.html")
+        fdump.write_text(raw_frag, encoding="utf-8")
+        print(f"sector fragment ({len(raw_frag):,} bytes) -> {fdump}")
+    if frag_p is not None:
+        print("-- parsed from sector-tab fragment --")
+        print(json.dumps(frag_p, indent=2))
+    else:
+        print("sector-tab fragment: nothing usable"
+              + (" (raw response saved above — upload it)" if raw_frag
+                 else ""))
     print("-- merged (what the app will use) --")
-    print(json.dumps(_merge_params(api_p, page_p, url), indent=2))
+    print(json.dumps(_compose(api_p, page_p, frag_p, guest, url), indent=2))
     if args.hunt:
         hunt_endpoints(sess, args.fund, r.text)
 

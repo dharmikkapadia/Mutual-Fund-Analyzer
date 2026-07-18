@@ -1894,6 +1894,8 @@ with tabs[9]:
                     ex = ", ".join(f"{k} {v:.2f}%" for k, v
                                    in prm["extra_sectors"].items())
                     notes.append(f"{nm}: unmapped sector rows — {ex}")
+                if prm.get("login_note"):
+                    notes.append(f"{nm}: {prm['login_note']}")
             except Exception as e:  # noqa: BLE001
                 errs.append(f"{nm}: {e}")
         prog.empty()
