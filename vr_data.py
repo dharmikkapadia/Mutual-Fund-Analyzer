@@ -1174,13 +1174,20 @@ def _main() -> None:  # pragma: no cover
     ap.add_argument("--email")
     ap.add_argument("--password")
     ap.add_argument("--cookie", help="Cookie header from a logged-in browser")
+    ap.add_argument("--cookie-file",
+                    help="path to a text file containing the Cookie header "
+                         "(avoids shell-quoting issues entirely)")
     ap.add_argument("--hunt", action="store_true",
                     help="probe likely data endpoints the page's JS calls")
     args = ap.parse_args()
 
+    cookie = args.cookie
+    if not cookie and args.cookie_file:
+        cookie = Path(args.cookie_file).read_text(
+            encoding="utf-8-sig").strip()
     sess = VRSession()
-    if args.cookie:
-        sess.set_cookie_header(args.cookie)
+    if cookie:
+        sess.set_cookie_header(cookie)
     elif args.email:
         sess.login(args.email, args.password or "")
         print("login: OK")
