@@ -527,6 +527,9 @@ def _label_number(soup, patterns: tuple[str, ...]):
         return _to_float(text[m.end():m.end() + 40]) if m else None
 
     for el in soup.find_all(string=rx):
+        if el.parent is not None and el.parent.name in (
+                "script", "style", "noscript", "template"):
+            continue          # JSON-LD/JS mentioning the label is not data
         v = _after(str(el))
         if v is not None:
             return v

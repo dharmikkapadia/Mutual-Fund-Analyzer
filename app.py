@@ -1795,9 +1795,11 @@ with tabs[9]:
         st.caption(
             "Uses **your own** VR account to read fund-portfolio pages. "
             "Credentials are kept in this session's memory only — never "
-            "stored, never synced. If VR blocks scripted logins, paste the "
-            "`Cookie` header from a logged-in browser tab instead "
-            "(DevTools → Network → any valueresearchonline.com request).")
+            "stored, never synced. **Cookie-paste is the reliable option**: "
+            "VR tends to treat scripted email/password logins as guests "
+            "and withholds portfolio data. In a logged-in browser tab: "
+            "DevTools (F12) → Network → click the fund-page request → "
+            "Request Headers → copy the whole `Cookie:` value.")
         lc1, lc2 = st.columns(2)
         vr_email = lc1.text_input("VR email", key="vr_email",
                                   autocomplete="off")
