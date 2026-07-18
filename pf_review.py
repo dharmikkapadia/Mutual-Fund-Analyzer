@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 
 import numpy as np
 import pandas as pd
@@ -136,6 +137,108 @@ def snapshots_from_json(raw: str) -> dict:
         return obj if isinstance(obj, dict) else {}
     except ValueError:
         return {}
+
+
+# --------------------------------------------------------------------------- #
+# Workbook import — a manually maintained review .xlsx becomes a snapshot
+# --------------------------------------------------------------------------- #
+def _norm_title(s) -> str:
+    return re.sub(r"\s+", " ", str(s or "")).strip().lower()
+
+
+# normalised header -> canonical field; sectors and the rest are appended
+_TITLE_MAP = {"scheme name": "__name", "p/b": "P/B", "p/e": "P/E",
+              "debt & cash": "Debt & Cash", "large stocks": "Large Stocks",
+              "mid cap stocks": "Mid cap Stocks",
+              "small cap stocks": "Small cap Stocks"}
+_TITLE_MAP.update({_norm_title(c): c for c in SECTOR_COLS})
+
+
+def _title_field(title: str) -> str | None:
+    t = _norm_title(title)
+    if t in _TITLE_MAP:
+        return _TITLE_MAP[t]
+    if t.startswith("aum"):
+        return "Aum in cr"
+    if t.startswith("value"):
+        return "__value"
+    return None
+
+
+def parse_workbook(data: bytes) -> dict:
+    """Parse a manual 'MF Portfolio Review' workbook into snapshot rows.
+
+    Header-driven and tolerant: finds the sheet and row containing
+    'Scheme Name', maps columns by (normalised) title, reads scheme rows
+    until the summary row (blank scheme name), and rescales
+    fraction-stored percentages (0.7675 shown as 76.75%) to the 0-100
+    scale the app uses. Returns {"as_on": str|None, "rows": [...]}.
+    """
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(data), data_only=True)
+    header_row = cols = ws_found = None
+    for ws in wb.worksheets:
+        for r in range(1, 6):
+            titles = [ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
+            if any(_norm_title(t) == "scheme name" for t in titles):
+                header_row, ws_found = r, ws
+                cols = {c: _title_field(t)
+                        for c, t in enumerate(titles, start=1)
+                        if _title_field(t) is not None}
+                break
+        if cols:
+            break
+    if not cols:
+        raise ValueError("no 'Scheme Name' header found — is this the "
+                         "review-workbook layout?")
+
+    as_on = None
+    for c, f in cols.items():
+        if f == "__value":
+            m = re.search(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+                          str(ws_found.cell(header_row, c).value or ""))
+            if m:
+                as_on = m.group(1)
+
+    rows = []
+    for r in range(header_row + 1, ws_found.max_row + 1):
+        rec = {c2: None for c2 in PARAM_COLS}
+        name = value = None
+        for c, f in cols.items():
+            v = ws_found.cell(r, c).value
+            if f == "__name":
+                name = str(v).strip() if v not in (None, "") else None
+            elif f == "__value":
+                value = _num(v)
+            else:
+                rec[f] = _num(v)
+        if not name:            # summary row / end of table
+            break
+        rows.append({"name": name, "value": value, "code": None,
+                     "vr_url": None, **rec})
+
+    # fraction-stored percentages -> 0-100 (their max would be ~1.0)
+    pct_vals = [r[c] for r in rows for c in PCT_COLS if r[c] is not None]
+    if pct_vals and max(pct_vals) <= 1.5:
+        for r in rows:
+            for c in PCT_COLS:
+                if r[c] is not None:
+                    r[c] = round(r[c] * 100.0, 6)
+    return {"as_on": as_on, "rows": rows}
+
+
+def month_key_from_as_on(as_on) -> str | None:
+    """'31/03/2026' -> '2026-03' (regex-based, tolerates odd dates)."""
+    m = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})", str(as_on or ""))
+    if not m:
+        return None
+    month, year = int(m.group(2)), int(m.group(3))
+    if year < 100:
+        year += 2000
+    if not 1 <= month <= 12:
+        return None
+    return f"{year:04d}-{month:02d}"
 
 
 # --------------------------------------------------------------------------- #

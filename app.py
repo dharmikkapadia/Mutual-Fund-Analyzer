@@ -2080,6 +2080,60 @@ with tabs[9]:
                  "spreadsheetml.sheet",
             help="Same layout and live formulas as the manual workbook.")
 
+    with st.expander("Import a review workbook (.xlsx) as a snapshot"):
+        st.caption(
+            "Upload a manually maintained **MF Portfolio Review** workbook "
+            "(one row per scheme: value, P/B, P/E, AUM, cap split, Debt & "
+            "Cash, sector columns). It's stored as that month's snapshot, "
+            "so months that predate the app join the comparison history.")
+        up = st.file_uploader("Workbook", type=["xlsx"], key="pf_upload",
+                              label_visibility="collapsed")
+        if up is not None:
+            imp = None
+            try:
+                imp = P.parse_workbook(up.getvalue())
+            except Exception as e:  # noqa: BLE001
+                st.error(f"Couldn't read that workbook: {e}")
+            if imp and not imp["rows"]:
+                st.warning("No scheme rows found under the header row.")
+            elif imp:
+                matched = 0
+                cands = [(name_of(universe, c), str(c)) for c in codes]
+                for row in imp["rows"]:
+                    code_m, score = H._best_core_match(
+                        H._core_tokens(row["name"]), cands)
+                    if code_m is not None and score >= 0.5:
+                        row["code"] = code_m
+                        matched += 1
+                tot_val = sum(r.get("value") or 0 for r in imp["rows"])
+                st.caption(
+                    f"{len(imp['rows'])} scheme(s) · total "
+                    f"₹{tot_val:,.0f}"
+                    + (f" · as on {imp['as_on']}" if imp["as_on"] else "")
+                    + f" · {matched} matched to watchlist schemes"
+                    + ("" if matched == len(imp["rows"]) else
+                       " (unmatched rows still count in snapshot "
+                       "comparisons, but won't load into the grid)"))
+                key_guess = (P.month_key_from_as_on(imp["as_on"])
+                             or dt.date.today().strftime("%Y-%m"))
+                ic1, ic2 = st.columns([1, 1.4])
+                imp_key = ic1.text_input("Save under month (YYYY-MM)",
+                                         value=key_guess, key="pf_imp_key")
+                if ic2.button("Save uploaded snapshot", type="primary",
+                              key="pf_imp_save"):
+                    if not re.fullmatch(r"\d{4}-\d{2}", imp_key.strip()):
+                        st.error("Month must look like 2026-03.")
+                    else:
+                        k = imp_key.strip()
+                        pf_snaps[k] = P.snapshot_pack(
+                            imp["rows"], imp["as_on"] or k)
+                        _pf_save()
+                        st.session_state.pf_msgs = [(
+                            "success",
+                            f"Imported {up.name} as snapshot {k} "
+                            f"({len(imp['rows'])} schemes).")]
+                        st.rerun()
+
     if pf_snaps:
         months = sorted(pf_snaps, reverse=True)
         pick = st.multiselect(
