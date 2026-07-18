@@ -48,13 +48,11 @@ VR_API_PORTFOLIO = VR_BASE + "/api/funds/{id}/portfolio/"
 # portfolio-tab HTML fragments; their JS sends the fund's *short name*
 # (hidden input #fund_name) plus cat_id/tab/lang, per the site's bundles
 VR_TAB_SECTOR = VR_BASE + "/funds/sector-holdings-tab-data/"
-# candidate sources for the Concentration cards (portfolio P/E and P/B):
-# the fragments/JSON that fill the portfolio tab, most likely first
-VR_AGG_ENDPOINTS = (
-    VR_BASE + "/api/funds/port-aggregates-chart/",
-    VR_BASE + "/funds/top-holdings-tab-data/",
-    VR_BASE + "/funds/holding-tab-ajax-data/",
-)
+# the 'Concentration & Valuation' fragment (portfolio P/E and P/B) — the
+# holding-tab endpoint with the page's form params, confirmed live; the
+# chart APIs append the fund id to the PATH (url + fund_id in the JS)
+VR_TAB_HOLDING = VR_BASE + "/funds/holding-tab-ajax-data/"
+VR_CHART_AGGREGATES = VR_BASE + "/api/funds/port-aggregates-chart/{id}"
 VR_LOGIN_PATHS = ("/login/", "/accounts/login/", "/membership/login/")
 # autocomplete endpoints seen on VR over time; tried in order
 VR_SEARCH_PATHS = (
@@ -324,16 +322,20 @@ class VRSession:
 
     def fetch_aggregates(self, inputs: dict,
                          referer: str | None = None) -> dict | None:
-        """Portfolio P/E and P/B (the tab's Concentration cards), tried
-        against the endpoints that fill the portfolio tab — HTML fragments
-        and chart JSON alike. Returns parsed params or None."""
+        """Portfolio P/E and P/B from the 'Concentration & Valuation'
+        fragment (holding-tab endpoint, page-form params — confirmed
+        live), with the path-style aggregates chart JSON as backup."""
         form = self._tab_form(inputs)
         if form is None:
             return None
-        for ep in VR_AGG_ENDPOINTS:
+        fund_id = inputs.get("fund_id", "")
+        attempts = [(VR_TAB_HOLDING, form)]
+        if fund_id:
+            attempts.append((VR_CHART_AGGREGATES.format(id=fund_id), None))
+        for ep, params in attempts:
             try:
                 time.sleep(0.8)
-                r = self.s.get(ep, params=form, timeout=TIMEOUT,
+                r = self.s.get(ep, params=params, timeout=TIMEOUT,
                                headers={"Referer": referer or VR_BASE + "/",
                                         "X-Requested-With": "XMLHttpRequest"})
             except requests.RequestException:
@@ -528,20 +530,26 @@ def _label_number(soup, patterns: tuple[str, ...]):
         v = _after(str(el))
         if v is not None:
             return v
-        parent = el.find_parent(["tr", "li", "dt", "p", "th", "td", "div"])
-        for container in (parent, parent.parent if parent is not None
-                          else None):
-            if container is not None:
-                v = _after(container.get_text(" ", strip=True))
-                if v is not None:
-                    return v
-        # dt/dd and label-above-value layouts: value in the next sibling
-        if parent is not None:
-            sib = parent.find_next_sibling()
-            if sib is not None:
-                v = _to_float(sib.get_text(" ", strip=True))
-                if v is not None:
-                    return v
+        # climb ancestors: at each level, try text-after-label within the
+        # container, then the first non-empty following sibling — covers
+        # <td><div>label</div></td><td>value</td> (VR's Concentration
+        # rows), plain <tr><td>label</td><td>value</td>, and dt/dd alike
+        node = el.parent
+        for _ in range(4):
+            if node is None or node.name in ("body", "html", "[document]"):
+                break
+            v = _after(node.get_text(" ", strip=True))
+            if v is not None:
+                return v
+            sib = node.find_next_sibling()
+            while sib is not None and not (hasattr(sib, "get_text")
+                                           and sib.get_text(strip=True)):
+                sib = sib.find_next_sibling()
+            if sib is not None and hasattr(sib, "get_text"):
+                sv = _to_float(sib.get_text(" ", strip=True))
+                if sv is not None:
+                    return sv
+            node = node.parent
     return None
 
 
