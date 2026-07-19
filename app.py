@@ -612,10 +612,12 @@ with st.sidebar:
     if cloud_sync.is_configured():
         with st.expander("☁️ Cloud sync (access anywhere)"):
             st.caption(
-                "Encrypt your watchlists with a passphrase and sync them to a "
-                "private store, so you can load them on any device. The "
-                "passphrase never leaves this app and is **not recoverable** — "
-                "if you lose it, the data is gone."
+                "Encrypt your watchlists **and PF-Review data** (monthly "
+                "snapshots, invested values, VR fund codes) with a "
+                "passphrase and sync them to a private store, so you can "
+                "load them on any device. The passphrase never leaves this "
+                "app and is **not recoverable** — if you lose it, the data "
+                "is gone."
             )
             cu = st.text_input("Username", key="sync_user",
                                placeholder="e.g. ravi.k")
@@ -627,14 +629,24 @@ with st.sidebar:
                     st.warning("Enter a username and passphrase.")
                 else:
                     try:
-                        data = cloud_sync.pull(cu, cp)
-                        if data is None:
-                            st.info("No saved watchlist found for that "
+                        res = cloud_sync.pull(cu, cp)
+                        if res is None:
+                            st.info("No saved record found for that "
                                     "username yet — use Save to create one.")
                         else:
-                            st.session_state.watchlists = data
-                            st.session_state.active_list = next(iter(data))
-                            st.success("Watchlist loaded.")
+                            wl, pf_synced = res
+                            st.session_state.watchlists = wl
+                            st.session_state.active_list = next(iter(wl))
+                            store.save(wl)
+                            if pf_synced is not None:
+                                st.session_state.pf_data = {
+                                    k: dict(pf_synced.get(k) or {})
+                                    for k in store.PF_DEFAULT}
+                                store.save_pf(st.session_state.pf_data)
+                            st.success(
+                                "Watchlists loaded."
+                                if pf_synced is None else
+                                "Watchlists + PF Review data loaded.")
                             st.rerun()
                     except cloud_sync.InvalidToken:
                         st.error("Wrong passphrase for that username.")
@@ -646,8 +658,10 @@ with st.sidebar:
                     st.warning("Enter a username and passphrase.")
                 else:
                     try:
-                        cloud_sync.push(cu, cp, st.session_state.watchlists)
-                        st.success("Watchlist saved to the cloud.")
+                        cloud_sync.push(cu, cp, st.session_state.watchlists,
+                                        st.session_state.pf_data)
+                        st.success("Watchlists + PF Review data saved "
+                                   "to the cloud.")
                     except PermissionError as e:
                         st.error(str(e))
                     except Exception as e:  # noqa: BLE001
@@ -2044,7 +2058,10 @@ with tabs[9]:
         pf_snaps[mkey] = P.snapshot_pack(rows, as_on.strftime("%d/%m/%Y"))
         _pf_save()
         st.success(f"Saved {mkey} ({len(rows)} schemes). Snapshots persist "
-                   "in this browser.")
+                   "in this browser"
+                   + (" — use ☁️ Cloud sync (sidebar) to back them up "
+                      "across devices." if cloud_sync.is_configured()
+                      else "."))
     if have_values:
         sc3.download_button(
             "⬇ Download Excel (PF Review)",

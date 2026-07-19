@@ -1,12 +1,19 @@
 """
-cloud_sync.py — optional encrypted, cross-device watchlist sync.
+cloud_sync.py — optional encrypted, cross-device sync of the user's data:
+watchlists AND the PF-Review data (monthly snapshots, invested values and
+per-scheme VR fund codes).
 
-This app/repo is meant to be **public**, so user watchlists are never stored
-in clear text anywhere. Each user picks a *username* and a *passphrase*. The
-watchlist JSON is encrypted inside the app (Argon2id key-derivation + Fernet /
+This app/repo is meant to be **public**, so user data is never stored in
+clear text anywhere. Each user picks a *username* and a *passphrase*. The
+data JSON is encrypted inside the app (Argon2id key-derivation + Fernet /
 AES-128-CBC+HMAC) and only the resulting ciphertext is sent to a **private**
 GitHub repo that acts as the datastore. Anyone who somehow obtains the blob
 sees only random bytes; without the passphrase it cannot be read.
+
+Payload versioning: blobs written before the PF-Review sync hold a plain
+{list name: [codes]} mapping; current blobs hold
+{"v": 2, "watchlists": {...}, "pf": {...}}. unpack() reads both, so existing
+records in the private repo keep working and are upgraded on the next Save.
 
 Why a private repo (not this public one):
   * the code stays clean — user data never lands in your source history;
@@ -71,13 +78,13 @@ def _derive_key(passphrase: str, salt: bytes) -> bytes:
     return base64.urlsafe_b64encode(raw)
 
 
-def encrypt(watchlists: dict, passphrase: str) -> str:
-    """Encrypt watchlists into a self-describing JSON envelope string."""
+def encrypt(payload: dict, passphrase: str) -> str:
+    """Encrypt a JSON-able payload into a self-describing envelope string."""
     if not passphrase:
         raise ValueError("A passphrase is required.")
     salt = _random_salt()
     key = _derive_key(passphrase, salt)
-    plaintext = json.dumps(watchlists, separators=(",", ":")).encode("utf-8")
+    plaintext = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     token = Fernet(key).encrypt(plaintext)
     envelope = {
         "v": _ENVELOPE_VERSION,
@@ -92,7 +99,8 @@ def encrypt(watchlists: dict, passphrase: str) -> str:
 
 
 def decrypt(envelope_str: str, passphrase: str) -> dict:
-    """Decrypt an envelope. Raises InvalidToken on a wrong passphrase."""
+    """Decrypt an envelope to the raw stored payload (legacy or v2 shape).
+    Raises InvalidToken on a wrong passphrase."""
     env = json.loads(envelope_str)
     salt = base64.b64decode(env["salt"])
     # Honour the parameters stored in the envelope so old blobs stay readable
@@ -108,9 +116,37 @@ def decrypt(envelope_str: str, passphrase: str) -> dict:
     )
     key = base64.urlsafe_b64encode(raw)
     plaintext = Fernet(key).decrypt(env["ct"].encode("ascii"))
-    data = json.loads(plaintext)
-    # Normalise to {name: [int, ...]} like store.load() does.
-    return {str(k): [int(c) for c in v] for k, v in data.items()}
+    return json.loads(plaintext)
+
+
+# --------------------------------------------------------------------------- #
+# Payload (what lives inside the encrypted envelope)
+# --------------------------------------------------------------------------- #
+_PAYLOAD_VERSION = 2
+
+
+def _norm_watchlists(d: dict) -> dict:
+    """Normalise to {name: [int, ...]} like store.load() does."""
+    return {str(k): [int(c) for c in v] for k, v in (d or {}).items()}
+
+
+def pack(watchlists: dict, pf: Optional[dict] = None) -> dict:
+    """Combine watchlists + PF-Review data into the stored payload."""
+    return {"v": _PAYLOAD_VERSION, "watchlists": watchlists, "pf": pf or {}}
+
+
+def unpack(data: dict) -> Tuple[dict, Optional[dict]]:
+    """(watchlists, pf-or-None) from a decrypted payload.
+
+    Reads both shapes: the v2 {"watchlists": ..., "pf": ...} envelope and
+    legacy blobs that are a plain {list name: [codes]} mapping (which can't
+    collide with v2 — a legacy value is a list, never a dict).
+    """
+    if isinstance(data, dict) and isinstance(data.get("watchlists"), dict):
+        pf = data.get("pf")
+        return (_norm_watchlists(data["watchlists"]),
+                dict(pf) if isinstance(pf, dict) and pf else None)
+    return _norm_watchlists(data), None
 
 
 def _random_salt() -> bytes:
@@ -179,8 +215,9 @@ def _get_remote(username: str) -> Tuple[Optional[str], Optional[str]]:
     return content, body["sha"]
 
 
-def pull(username: str, passphrase: str) -> Optional[dict]:
-    """Fetch + decrypt a user's watchlists. None if no record exists.
+def pull(username: str, passphrase: str) -> Optional[Tuple[dict, Optional[dict]]]:
+    """Fetch + decrypt a user's record -> (watchlists, pf-or-None).
+    None if no record exists.
 
     Raises InvalidToken if the passphrase is wrong.
     """
@@ -189,11 +226,13 @@ def pull(username: str, passphrase: str) -> Optional[dict]:
     envelope, _sha = _get_remote(username)
     if envelope is None:
         return None
-    return decrypt(envelope, passphrase)
+    return unpack(decrypt(envelope, passphrase))
 
 
-def push(username: str, passphrase: str, watchlists: dict) -> None:
-    """Encrypt + upload a user's watchlists to the private repo.
+def push(username: str, passphrase: str, watchlists: dict,
+         pf: Optional[dict] = None) -> None:
+    """Encrypt + upload a user's watchlists + PF-Review data to the
+    private repo.
 
     If a record already exists for this username, the passphrase must decrypt
     it first — otherwise we refuse, so nobody can clobber another user's data.
@@ -216,7 +255,7 @@ def push(username: str, passphrase: str, watchlists: dict) -> None:
                 "passphrase."
             ) from exc
 
-    envelope = encrypt(watchlists, passphrase)
+    envelope = encrypt(pack(watchlists, pf), passphrase)
     payload = {
         "message": f"watchlist sync ({_path(username)[:24]}…)",
         "content": base64.b64encode(envelope.encode("utf-8")).decode("ascii"),
