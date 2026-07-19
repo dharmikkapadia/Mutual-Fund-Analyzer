@@ -83,17 +83,57 @@ _BROWSER_HEADERS = {
 # --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
+def _quote_cred(s: str) -> str:
+    """Percent-encode a proxy credential, unless it already is one —
+    a raw '#', '@' or '/' in a password breaks URL parsing otherwise."""
+    from urllib.parse import quote
+    if re.search(r"%[0-9A-Fa-f]{2}", s):       # user pre-encoded it
+        return s
+    return quote(s, safe="")
+
+
+def _build_proxy_url(vr) -> str | None:
+    """Proxy URL from the [vr] secrets mapping. Two accepted forms:
+
+        proxy_host / proxy_port / proxy_user / proxy_pass  (recommended —
+            values are taken literally, no URL-escaping worries)
+        proxy = "http://user:pass@host:port"  (credentials are auto
+            percent-encoded, so special characters just work)
+    """
+    host = str(vr.get("proxy_host") or "").strip()
+    if host:
+        scheme = str(vr.get("proxy_scheme") or "http").strip()
+        port = str(vr.get("proxy_port") or "").strip()
+        user = str(vr.get("proxy_user") or "").strip()
+        pw = str(vr.get("proxy_pass") or "")
+        auth = f"{_quote_cred(user)}:{_quote_cred(pw)}@" if user else ""
+        return f"{scheme}://{auth}{host}" + (f":{port}" if port else "")
+    p = str(vr.get("proxy") or "").strip()
+    if not p:
+        return None
+    m = re.match(r"^(\w+://)?(.*)$", p, re.S)
+    scheme, rest = m.group(1) or "http://", m.group(2)
+    if "@" in rest:
+        creds, hostport = rest.rsplit("@", 1)
+        user, _, pw = creds.partition(":")
+        auth = _quote_cred(user) + (":" + _quote_cred(pw) if pw else "")
+        return scheme + auth + "@" + hostport
+    return scheme + rest
+
+
 def _secret_proxy() -> str | None:
-    """Optional outbound proxy for VR traffic, from Streamlit secrets:
-        [vr]
-        proxy = "http://user:pass@host:port"
-    Lets a cloud deployment fetch via a home/ISP IP when VR's bot
-    protection refuses the host's own (datacenter) IP."""
+    """Optional outbound proxy for VR traffic, from Streamlit secrets
+    (see _build_proxy_url for the accepted [vr] forms). Lets a cloud
+    deployment fetch via a home/ISP IP when VR's bot protection refuses
+    the host's own (datacenter) IP."""
     try:
         import streamlit as st
-        p = str(st.secrets["vr"]["proxy"]).strip()
-        return p or None
+        vr = st.secrets["vr"]
     except Exception:  # noqa: BLE001 — no streamlit / no [vr] section
+        return None
+    try:
+        return _build_proxy_url(vr)
+    except Exception:  # noqa: BLE001 — malformed section => no proxy
         return None
 
 
