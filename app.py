@@ -1971,10 +1971,22 @@ with tabs[9]:
                 st.session_state.pf_msgs = msgs
                 st.rerun()
 
-    if st.button("Fetch from Value Research", type="primary",
-                 disabled=not pf_funds,
-                 help="Pull P/B, P/E, AUM, cap split and sectors from VR's "
-                      "public endpoints for every fund in the review."):
+    fb1, fb2, _fb3 = st.columns([1.2, 1, 2])
+    fetch_clicked = fb1.button(
+        "Fetch from Value Research", type="primary", width="stretch",
+        disabled=not pf_funds,
+        help="Pull P/B, P/E, AUM, cap split and sectors from VR's "
+             "public endpoints for every fund in the review.")
+    if fb2.button("Test VR access", width="stretch",
+                  help="One quick request to check whether Value Research "
+                       "answers this server at all — handy on cloud hosts, "
+                       "where VR's bot protection often blocks the "
+                       "server's IP."):
+        with st.spinner("Probing Value Research…"):
+            _ok, _detail = VP.probe_vr(VP.create_session(),
+                                       next(iter(pf_funds), "16026"))
+        (st.success if _ok else st.error)(_detail)
+    if fetch_clicked:
         fetched = st.session_state.setdefault("pf_fetched", {})
         errs, notes = [], []
         todo = list(pf_funds.items())
@@ -1987,19 +1999,22 @@ with tabs[9]:
                           text=f"VR: {nm or fid}")
             try:
                 prm = VP.fetch_fund(vp_sess, fid)
+            except VP.VRBlocked as e:
+                # VR is refusing this host outright — stop immediately
+                # instead of hammering a blocked server
+                errs.append(f"{nm or fid}: {e}")
+                if i < len(todo) - 1:
+                    errs.append("Stopped — the remaining funds were "
+                                "skipped ('Test VR access' re-checks "
+                                "this host any time).")
+                break
             except Exception as e:  # noqa: BLE001
                 errs.append(f"{nm or fid}: {e}")
-                # every endpoint failing for one fund means VR is refusing
-                # this host — stop instead of hammering a blocked server
                 dead_streak += 1
                 if dead_streak >= 2:
                     errs.append(
-                        "Stopped: VR is refusing every request from this "
-                        "host (bot protection). Try again in a few "
-                        "minutes; if it keeps failing on a cloud "
-                        "deployment, run the fetch from a locally-run "
-                        "app — manual entry, snapshots and the Excel "
-                        "export all still work here.")
+                        "Stopped after repeated failures — check 'Test "
+                        "VR access' and try again later.")
                     break
                 continue
             dead_streak = 0

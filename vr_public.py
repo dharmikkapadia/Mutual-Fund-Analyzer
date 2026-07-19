@@ -57,13 +57,40 @@ VR_BASE = "https://www.valueresearchonline.com"
 TIMEOUT = 30
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+# Chrome also sends these on the fund page's own XHR calls; matching them
+# helps when VR's protection is header-rule-based (an IP-level block on
+# cloud/datacenter hosts is not something headers can bypass)
+_BROWSER_HEADERS = {
+    "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", '
+                 '"Google Chrome";v="126"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Dest": "empty",
+}
 
 
 # --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
+def _secret_proxy() -> str | None:
+    """Optional outbound proxy for VR traffic, from Streamlit secrets:
+        [vr]
+        proxy = "http://user:pass@host:port"
+    Lets a cloud deployment fetch via a home/ISP IP when VR's bot
+    protection refuses the host's own (datacenter) IP."""
+    try:
+        import streamlit as st
+        p = str(st.secrets["vr"]["proxy"]).strip()
+        return p or None
+    except Exception:  # noqa: BLE001 — no streamlit / no [vr] section
+        return None
+
+
 def create_session():
-    """A requests-compatible session — cloudscraper when available."""
+    """A requests-compatible session — cloudscraper when available; routed
+    through the [vr] proxy secret when one is configured."""
     if _HAS_CLOUDSCRAPER:
         sess = cloudscraper.create_scraper(
             browser={"browser": "chrome", "platform": "windows",
@@ -72,11 +99,15 @@ def create_session():
         sess = requests.Session()
     sess.headers.update({"User-Agent": USER_AGENT,
                          "Accept-Language": "en-US,en;q=0.9"})
+    proxy = _secret_proxy()
+    if proxy:
+        sess.proxies.update({"http": proxy, "https": proxy})
     return sess
 
 
 def session_kind() -> str:
-    return "cloudscraper" if _HAS_CLOUDSCRAPER else "requests"
+    kind = "cloudscraper" if _HAS_CLOUDSCRAPER else "requests"
+    return kind + (" + proxy" if _secret_proxy() else "")
 
 
 def fund_code(ref) -> str | None:
@@ -94,33 +125,58 @@ def _looks_like_challenge(text: str) -> bool:
             or "challenge-platform" in t or "attention required" in t)
 
 
-def _get(sess, url: str, code: str, as_json: bool, xhr: bool = False):
-    """GET with a small retry loop. Returns parsed JSON or text."""
-    headers = {
+class VRBlocked(VRError):
+    """VR's bot protection refused the request (403/503/challenge page) —
+    retrying or hitting further endpoints from this host is pointless."""
+
+
+BLOCKED_MSG = (
+    "Value Research's bot protection is refusing this server's IP. "
+    "Cloud-host IPs (Streamlit Cloud, AWS, GCP…) are commonly blocked "
+    "outright — the same fetch works from a home/office connection. "
+    "Options: run the app locally for the monthly fetch, or route VR "
+    "traffic through your own proxy by setting [vr] proxy in Streamlit "
+    "secrets (see README). Manual entry, snapshots, import and the Excel "
+    "export all work fine on this host.")
+
+
+def _headers(code: str, as_json: bool, xhr: bool = False) -> dict:
+    h = {
         "Accept": ("application/json, text/plain, */*" if as_json else
                    "text/html,application/xhtml+xml,application/xml;q=0.9,"
                    "*/*;q=0.8"),
         "Referer": f"{VR_BASE}/funds/{code}/",
         "User-Agent": USER_AGENT,
         "Accept-Language": "en-US,en;q=0.9",
+        **_BROWSER_HEADERS,
     }
     if xhr:
-        headers["X-Requested-With"] = "XMLHttpRequest"
+        h["X-Requested-With"] = "XMLHttpRequest"
+    return h
+
+
+def _get(sess, url: str, code: str, as_json: bool, xhr: bool = False):
+    """GET with a small retry loop for transient errors. A 403/503 or a
+    bot-check page raises VRBlocked immediately — no retries, it never
+    clears within a request loop. Returns parsed JSON or text."""
+    headers = _headers(code, as_json, xhr)
     last: Exception = VRError("no attempt made")
     for attempt in range(3):
         try:
             r = sess.get(url, timeout=TIMEOUT, headers=headers)
-            if r.status_code in (403, 429, 500, 502, 503, 504):
-                last = VRError(f"HTTP {r.status_code}"
-                               + (" (bot protection?)"
-                                  if r.status_code in (403, 503) else ""))
+            if r.status_code in (403, 503):
+                raise VRBlocked(f"HTTP {r.status_code} (bot protection)")
+            if r.status_code in (429, 500, 502, 504):
+                last = VRError(f"HTTP {r.status_code}")
                 time.sleep(1.2 * (attempt + 1))
                 continue
             r.raise_for_status()
             text = r.text
             if _looks_like_challenge(text):
-                raise VRError("VR returned a bot-check page")
+                raise VRBlocked("VR returned a bot-check page")
             return r.json() if as_json else text
+        except VRBlocked:
+            raise
         except Exception as e:  # noqa: BLE001
             last = e
             time.sleep(1.0 * (attempt + 1))
@@ -307,6 +363,17 @@ def fetch_fund(sess, code) -> dict:
     p.update({"warnings": [], "fund_name": "",
               "url": f"{VR_BASE}/funds/{code}/"})
     got_any = False
+    blocked = 0
+
+    def _note_failure(what: str, e: Exception) -> None:
+        nonlocal blocked
+        p["warnings"].append(f"{what} failed: {e}")
+        if isinstance(e, VRBlocked):
+            # one refused endpoint can be a fluke; two means this host's
+            # IP is being refused — hitting the rest is pointless
+            blocked += 1
+            if blocked >= 2:
+                raise VRBlocked(BLOCKED_MSG)
 
     # --- market-cap split ---
     try:
@@ -314,6 +381,8 @@ def fetch_fund(sess, code) -> dict:
                     code, True)
         p["large"], p["mid"], p["small"] = parse_port_aggregates(data)
         got_any = True
+    except VRError as e:
+        _note_failure("market-cap split", e)
     except Exception as e:  # noqa: BLE001
         p["warnings"].append(f"market-cap split failed: {e}")
 
@@ -326,6 +395,8 @@ def fetch_fund(sess, code) -> dict:
         got_any = got_any or p["debt_cash"] is not None
         if p["as_of"] is None and data.get("date"):
             p["as_of"] = pretty_date(data.get("date"))
+    except VRError as e:
+        _note_failure("asset allocation", e)
     except Exception as e:  # noqa: BLE001
         p["warnings"].append(f"asset allocation failed: {e}")
 
@@ -339,6 +410,8 @@ def fetch_fund(sess, code) -> dict:
         if date:
             p["as_of"] = pretty_date(date)
         got_any = got_any or bool(sectors)
+    except VRError as e:
+        _note_failure("sectors", e)
     except Exception as e:  # noqa: BLE001
         p["warnings"].append(f"sectors failed: {e}")
 
@@ -352,6 +425,8 @@ def fetch_fund(sess, code) -> dict:
         try:
             frags[tag] = _get(sess, url, code, False, xhr=True)
             got_any = True
+        except VRError as e:
+            _note_failure(f"{tag} page", e)
         except Exception as e:  # noqa: BLE001
             p["warnings"].append(f"{tag} page failed: {e}")
     for page in frags.values():
@@ -438,6 +513,37 @@ def peek_fund(sess, code) -> tuple[str, str]:
     data = _get(sess, f"{VR_BASE}/api/funds/sector-chart/{code}", code, True)
     _, _, date, name = parse_sector_chart(data)
     return name, pretty_date(date)
+
+
+def probe_vr(sess, code: str = "16026") -> tuple[bool, str]:
+    """One request -> (ok, human-readable diagnosis) of whether VR answers
+    this host at all. Used by the UI's 'Test VR access' button."""
+    client = f"client: {session_kind()}"
+    url = f"{VR_BASE}/api/funds/asset-allocation-chart/{code}"
+    try:
+        r = sess.get(url, timeout=TIMEOUT, headers=_headers(code, True))
+    except requests.RequestException as e:
+        return False, f"Could not reach Value Research ({client}): {e}"
+    if r.status_code == 200:
+        try:
+            r.json()
+            return True, (f"VR answered normally ({client}) — "
+                          "fetching should work from this host.")
+        except ValueError:
+            pass
+        if _looks_like_challenge(r.text or ""):
+            return False, (f"VR returned a Cloudflare JS challenge page "
+                           f"({client}) — the challenge wasn't cleared, so "
+                           "fetches will fail. " + BLOCKED_MSG)
+        return False, (f"VR answered HTTP 200 but not with the expected "
+                       f"JSON ({client}) — endpoint may have changed; "
+                       "share this with the developer.")
+    if r.status_code in (403, 503):
+        kind = ("Cloudflare challenge page"
+                if _looks_like_challenge(r.text or "") else "hard refusal")
+        return False, (f"HTTP {r.status_code} — {kind} ({client}). "
+                       + BLOCKED_MSG)
+    return False, f"VR answered HTTP {r.status_code} ({client})."
 
 
 # --------------------------------------------------------------------------- #

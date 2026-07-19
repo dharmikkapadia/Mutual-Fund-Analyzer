@@ -70,6 +70,15 @@ stored in each visitor's browser via localStorage (the ephemeral, shared server
 filesystem is auto-disabled; `AFP_BROWSER_ONLY=1` forces this on other hosts,
 `AFP_NO_BROWSER_STORE=1` disables the browser sync for headless tests).
 
+**PF Review fetch on cloud hosts:** Value Research's bot protection usually
+refuses cloud/datacenter IPs (HTTP 403), so the fetch can fail on Streamlit
+Cloud while working fine from a home connection — the tab's **Test VR access**
+button diagnoses exactly what VR returns. Workarounds: run the app locally for
+the monthly fetch (snapshots sync across via ☁️ Cloud sync), import the desktop
+fetcher's workbook as a snapshot, or set an outbound proxy with a
+residential/ISP IP under `[vr] proxy` in Streamlit secrets (see
+`.streamlit/secrets.toml.example`) — only VR traffic is routed through it.
+
 ## Project layout
 - `app.py` — Streamlit UI (themes, charts, all tabs).
 - `returns.py` — pure pandas/numpy analytics engine (returns, risk ratios, capture, drawdowns, SIP/goal, blend, correlation) — no network or UI, fully unit-testable.
