@@ -381,6 +381,55 @@ def fetch_fund(sess, code) -> dict:
     return p
 
 
+def read_codes_csv(data: bytes) -> list[tuple[str, str | None]]:
+    """(code, name-or-None) pairs from a fund-codes CSV.
+
+    Accepts the desktop fetcher's template (a column whose header contains
+    'code', optional column containing 'name'/'scheme') or a plain list of
+    codes with no header. Tolerates stray columns and blank rows.
+    """
+    import csv
+    import io
+
+    rows = list(csv.reader(io.StringIO(
+        data.decode("utf-8-sig", errors="replace"))))
+    specs: list[tuple[str, str | None]] = []
+    if not rows:
+        return specs
+
+    def norm(h):
+        return re.sub(r"[^a-z]", "", str(h).lower())
+
+    header = [norm(h) for h in rows[0]]
+    code_idx = name_idx = None
+    for i, h in enumerate(header):
+        if code_idx is None and ("code" in h or h in ("id", "fundid")):
+            code_idx = i
+        if name_idx is None and ("name" in h or "scheme" in h):
+            name_idx = i
+    start = 1 if code_idx is not None else 0
+    if code_idx is None:
+        code_idx = 0                       # no header: first column is the code
+
+    for row in rows[start:]:
+        if not row:
+            continue
+        code = str(row[code_idx]).strip() if len(row) > code_idx else ""
+        if not code.isdigit():             # tolerate stray columns
+            nums = [str(c).strip() for c in row if str(c).strip().isdigit()]
+            if not nums:
+                continue
+            code = nums[0]
+        name = None
+        if name_idx is not None and len(row) > name_idx:
+            nm = str(row[name_idx]).strip()
+            if nm and not nm.isdigit():
+                name = nm
+        if code not in (c for c, _ in specs):
+            specs.append((code, name))
+    return specs
+
+
 def peek_fund(sess, code) -> tuple[str, str]:
     """One cheap JSON call -> (fund name, as-on date) for a code."""
     code = fund_code(code)

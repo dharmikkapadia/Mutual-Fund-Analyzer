@@ -1771,15 +1771,18 @@ def _pf_save() -> None:
     store.save_pf(st.session_state.pf_data)
 
 
-def _pf_grid_df(pf_codes: list[int], values: dict, snaps: dict) -> pd.DataFrame:
-    """Editor seed: fetched params, else the latest snapshot, else blanks."""
+def _pf_grid_df(funds: dict, values: dict, snaps: dict) -> pd.DataFrame:
+    """Editor seed: fetched params, else the latest snapshot, else blanks.
+
+    `funds` is the review's own registry {vr_code: scheme name}.
+    """
     latest = snaps.get(max(snaps)) if snaps else None
     by_code = ({str(r.get("code")): r for r in P.snapshot_rows(latest)}
                if latest else {})
     fetched = st.session_state.get("pf_fetched", {})
     recs = []
-    for c in pf_codes:
-        rec = {"Code": str(c), "Scheme Name": name_of(universe, c),
+    for c, nm in funds.items():
+        rec = {"Code": str(c), "Scheme Name": nm or f"Fund {c}",
                "Value": float(values.get(str(c)) or 0.0)}
         src = fetched.get(str(c), {}).get("row") or {
             k: by_code.get(str(c), {}).get(k) for k in P.PARAM_COLS}
@@ -1787,104 +1790,205 @@ def _pf_grid_df(pf_codes: list[int], values: dict, snaps: dict) -> pd.DataFrame:
             v = src.get(k)
             rec[k] = np.nan if v is None else v
         recs.append(rec)
-    return pd.DataFrame(recs).set_index("Code")
+    return pd.DataFrame(
+        recs, columns=["Code", "Scheme Name", "Value", *P.PARAM_COLS]
+    ).set_index("Code")
 
 
 with tabs[9]:
     section("Monthly portfolio review")
     st.caption(
-        "The watchlist as your real portfolio: enter each scheme's invested "
-        "value, pull its month-end parameters (P/B, P/E, AUM, market-cap "
-        "split, sectors) from Value Research's **public** data endpoints — "
-        "no VR account or login involved — and read the **value-weighted** "
-        "portfolio aggregates: the app version of the monthly MF Portfolio "
-        "Review spreadsheet. Every cell stays editable, so the tab also "
-        "works fully manually.")
+        "Your real portfolio, reviewed monthly — **independent of the "
+        "watchlist**: add each fund by its Value Research code once (it's "
+        "remembered), enter the invested value, pull the month-end "
+        "parameters (P/B, P/E, AUM, market-cap split, sectors) from VR's "
+        "**public** data endpoints — no VR account or login involved — and "
+        "read the **value-weighted** portfolio aggregates: the app version "
+        "of the monthly MF Portfolio Review spreadsheet. Every cell stays "
+        "editable, so the tab also works fully manually.")
 
     pf = st.session_state.pf_data
-    vr_urls: dict = pf.setdefault("vr_urls", {})
+    pf_funds: dict = pf.setdefault("funds", {})
     pf_values: dict = pf.setdefault("values", {})
     pf_snaps: dict = pf.setdefault("snapshots", {})
 
-    # -- scheme rows: invested value lives in the grid; VR code per scheme -- #
-    section("Fund pages on Value Research")
-    st.caption("One VR fund page URL **or just the numeric fund code** per "
-               "scheme (e.g. `16026` or `…/funds/16026/hdfc-flexi-cap-fund"
-               "-direct-plan/`). Remembered across sessions. **Auto-find** "
-               "fills the blanks via VR search.")
-    url_changed = False
-    _unonce = st.session_state.get("pf_url_nonce", 0)
-    for c in codes:
-        u = st.text_input(
-            name_of(universe, c), key=f"pfu_{_unonce}_{c}",
-            value=vr_urls.get(str(c), ""),
-            placeholder="fund code (e.g. 16026) or "
-                        "https://www.valueresearchonline.com/funds/…")
-        if u.strip() != vr_urls.get(str(c), ""):
-            vr_urls[str(c)] = u.strip()
-            url_changed = True
-    if url_changed:
-        _pf_save()
-
-    ac1, ac2 = st.columns([1, 1])
-    if ac1.button("Auto-find VR pages",
-                  help="Search VR for schemes whose URL/code is blank."):
-        misses = []
-        finder = V.VRSession()          # unauthenticated — search is public
-        with st.spinner("Searching Value Research…"):
-            for c in codes:
-                if vr_urls.get(str(c)):
-                    continue
-                nm = name_of(universe, c)
+    # one-time migration: the old layout keyed VR codes/URLs by watchlist
+    # scheme ("vr_urls") — carry those into the review's own registry
+    if not pf_funds and pf.get("vr_urls"):
+        for _ac, _ref in pf["vr_urls"].items():
+            _fc = VP.fund_code(_ref)
+            if _fc and _fc not in pf_funds:
                 try:
-                    cands = finder.search_funds(nm)
-                except Exception as e:  # noqa: BLE001
-                    misses.append(f"{nm}: search failed ({e})")
-                    continue
-                target = H._tokens(nm)
-                best, score = None, 0.0
-                for cn, cu in cands:
-                    sc = H._name_score(target, cn)
-                    if sc > score:
-                        best, score = cu, sc
-                if best and score >= 0.45:
-                    vr_urls[str(c)] = best
-                else:
-                    misses.append(f"{nm}: no confident match "
-                                  f"(best {score:.2f})")
+                    _nm = name_of(universe, int(_ac))
+                except (TypeError, ValueError):
+                    _nm = ""
+                pf_funds[_fc] = _nm or f"Fund {_fc}"
+                _v = pf_values.pop(str(_ac), None)
+                if _v:
+                    pf_values[_fc] = _v
+        pf["vr_urls"] = {}
+        if pf_funds:
+            _pf_save()
+
+    def _pf_touch() -> None:
+        """Persist the registry and reseed the grid editor."""
         _pf_save()
-        # fresh widget keys so the URL fields pick up the found values
-        st.session_state.pf_url_nonce = _unonce + 1
-        if misses:
+        st.session_state.pf_nonce = st.session_state.get("pf_nonce", 0) + 1
+
+    # -- the fund registry: add once by VR code, delete when sold -- #
+    section("Funds in the review")
+    st.caption("Add each fund by its **VR fund code** (the number in the "
+               "fund's valueresearchonline.com URL, e.g. `16026`) or by "
+               "pasting the fund page URL. The scheme name fills in from "
+               "Value Research, and the list is remembered (browser + "
+               "☁️ Cloud sync). Remove a fund when you no longer hold it — "
+               "saved monthly snapshots keep its history.")
+    _anonce = st.session_state.get("pf_add_nonce", 0)
+    nc1, nc2 = st.columns([3, 1])
+    new_ref = nc1.text_input(
+        "Add a fund", key=f"pf_addref_{_anonce}",
+        label_visibility="collapsed",
+        placeholder="fund code (e.g. 16026) or "
+                    "https://www.valueresearchonline.com/funds/…")
+    if nc2.button("➕ Add fund", width="stretch",
+                  disabled=not new_ref.strip()):
+        _fc = VP.fund_code(new_ref)
+        if not _fc:
             st.session_state.pf_msgs = [
-                ("warning", "Not auto-matched — paste these URLs manually:"
-                 "\n\n- " + "\n- ".join(misses))]
+                ("error", f"'{new_ref.strip()}' has no numeric VR fund "
+                          "code — enter the code itself or the fund "
+                          "page URL.")]
+        elif _fc in pf_funds:
+            st.session_state.pf_msgs = [
+                ("info", f"Code {_fc} is already in the review "
+                         f"({pf_funds[_fc]}).")]
+        else:
+            _nm = ""
+            try:
+                with st.spinner(f"Looking up code {_fc} on Value Research…"):
+                    _nm, _ = VP.peek_fund(VP.create_session(), _fc)
+            except Exception:  # noqa: BLE001 — name fills in on next fetch
+                pass
+            pf_funds[_fc] = _nm or f"Fund {_fc}"
+            _pf_touch()
+            st.session_state.pf_msgs = [
+                ("success", f"Added **{pf_funds[_fc]}** (code {_fc})."
+                 + ("" if _nm else " Name lookup failed — it will fill "
+                                  "in on the next fetch."))]
+        st.session_state.pf_add_nonce = _anonce + 1
         st.rerun()
 
-    if ac2.button("Fetch from Value Research", type="primary",
-                  help="Pull P/B, P/E, AUM, cap split and sectors from VR's "
-                       "public endpoints for every scheme that has a fund "
-                       "code or page URL set."):
+    if not pf_funds:
+        st.info("No funds in the review yet — add your first VR fund code "
+                "above, or bulk-add below.")
+    for _fc, _fnm in list(pf_funds.items()):
+        rc1, rc2 = st.columns([6, 1])
+        rc1.markdown(f"**{_fnm}**  ·  code `{_fc}`")
+        if rc2.button("🗑 Remove", key=f"pf_del_{_fc}", width="stretch",
+                      help="Remove this fund from the review (already-"
+                           "saved monthly snapshots keep it)"):
+            pf_funds.pop(_fc, None)
+            pf_values.pop(str(_fc), None)
+            st.session_state.get("pf_fetched", {}).pop(str(_fc), None)
+            _pf_touch()
+            st.session_state.pf_msgs = [
+                ("success", f"Removed **{_fnm}** (code {_fc}). Past "
+                            "snapshots still include it.")]
+            st.rerun()
+
+    with st.expander("Bulk add — fund-codes CSV, or import the watchlist"):
+        st.caption("Upload a CSV with a **Fund Code** column (optional "
+                   "Scheme Name column) — the same template as the desktop "
+                   "fetcher. Names fill in from Value Research on the next "
+                   "fetch if the CSV has none.")
+        up_csv = st.file_uploader("Fund-codes CSV", type=["csv"],
+                                  key="pf_codes_csv",
+                                  label_visibility="collapsed")
+        if up_csv is not None and st.button("Add codes from CSV",
+                                            key="pf_csv_add"):
+            try:
+                specs = VP.read_codes_csv(up_csv.getvalue())
+            except Exception as e:  # noqa: BLE001
+                specs = []
+                st.error(f"Couldn't read that CSV: {e}")
+            if specs:
+                added = dupes = 0
+                for _fc, _nm in specs:
+                    if _fc in pf_funds:
+                        dupes += 1
+                    else:
+                        pf_funds[_fc] = _nm or f"Fund {_fc}"
+                        added += 1
+                _pf_touch()
+                st.session_state.pf_msgs = [
+                    ("success", f"Added {added} fund(s) from {up_csv.name}"
+                     + (f" ({dupes} already present)" if dupes else "")
+                     + ". Names without a CSV entry fill in from VR on "
+                       "the next fetch.")]
+                st.rerun()
+            elif up_csv is not None:
+                st.warning("No fund codes found — the CSV needs a 'Fund "
+                           "Code' column (or a plain list of codes).")
+        if codes:
+            st.caption("Or pull in the current watchlist's schemes — each "
+                       "VR code is found by name search.")
+            if st.button("Import watchlist schemes", key="pf_wl_import",
+                         help="Search VR for every watchlist scheme and "
+                              "add the matches to the review."):
+                misses, added = [], 0
+                finder = V.VRSession()   # unauthenticated — search is public
+                with st.spinner("Searching Value Research…"):
+                    for c in codes:
+                        nm = name_of(universe, c)
+                        try:
+                            cands = finder.search_funds(nm)
+                        except Exception as e:  # noqa: BLE001
+                            misses.append(f"{nm}: search failed ({e})")
+                            continue
+                        target = H._tokens(nm)
+                        best, score = None, 0.0
+                        for cn, cu in cands:
+                            sc = H._name_score(target, cn)
+                            if sc > score:
+                                best, score = (cn, cu), sc
+                        _fc = VP.fund_code(best[1]) if best else None
+                        if _fc and score >= 0.45:
+                            if _fc not in pf_funds:
+                                pf_funds[_fc] = best[0]
+                                added += 1
+                        else:
+                            misses.append(f"{nm}: no confident match "
+                                          f"(best {score:.2f})")
+                        time.sleep(random.uniform(0.3, 0.7))
+                _pf_touch()
+                msgs = ([("success",
+                          f"Imported {added} fund(s) from the watchlist.")]
+                        if added else [])
+                if misses:
+                    msgs.append(("warning", "Not imported — add these by "
+                                            "code manually:\n\n- "
+                                            + "\n- ".join(misses)))
+                st.session_state.pf_msgs = msgs
+                st.rerun()
+
+    if st.button("Fetch from Value Research", type="primary",
+                 disabled=not pf_funds,
+                 help="Pull P/B, P/E, AUM, cap split and sectors from VR's "
+                      "public endpoints for every fund in the review."):
         fetched = st.session_state.setdefault("pf_fetched", {})
         errs, notes = [], []
-        for c in codes:
-            ref = vr_urls.get(str(c), "").strip()
-            if ref and VP.fund_code(ref) is None:
-                errs.append(f"{name_of(universe, c)}: no numeric fund code "
-                            f"in '{ref}' — paste the VR fund page URL or "
-                            "the code itself.")
-        todo = [(c, VP.fund_code(vr_urls.get(str(c), ""))) for c in codes]
-        todo = [(c, fid) for c, fid in todo if fid]
+        todo = list(pf_funds.items())
         vp_sess = VP.create_session()
         prog = st.progress(0.0, text="Fetching from Value Research…")
         dead_streak = 0
-        for i, (c, fid) in enumerate(todo):
-            nm = name_of(universe, c)
-            prog.progress((i + 1) / max(1, len(todo)), text=f"VR: {nm}")
+        names_changed = False
+        for i, (fid, nm) in enumerate(todo):
+            prog.progress((i + 1) / max(1, len(todo)),
+                          text=f"VR: {nm or fid}")
             try:
                 prm = VP.fetch_fund(vp_sess, fid)
             except Exception as e:  # noqa: BLE001
-                errs.append(f"{nm}: {e}")
+                errs.append(f"{nm or fid}: {e}")
                 # every endpoint failing for one fund means VR is refusing
                 # this host — stop instead of hammering a blocked server
                 dead_streak += 1
@@ -1899,9 +2003,13 @@ with tabs[9]:
                     break
                 continue
             dead_streak = 0
-            fetched[str(c)] = {"row": P.params_to_row(prm),
-                               "as_of": prm.get("as_of"),
-                               "vr_name": prm.get("fund_name")}
+            # VR's own scheme name is authoritative — refresh the registry
+            if prm.get("fund_name") and prm["fund_name"] != pf_funds.get(fid):
+                pf_funds[fid] = prm["fund_name"]
+                names_changed = True
+            nm = pf_funds.get(fid) or f"Fund {fid}"
+            fetched[str(fid)] = {"row": P.params_to_row(prm),
+                                 "as_of": prm.get("as_of")}
             if prm.get("extra_sectors"):
                 ex = ", ".join(f"{k} {v:.2f}%" for k, v
                                in prm["extra_sectors"].items())
@@ -1911,11 +2019,9 @@ with tabs[9]:
             if i < len(todo) - 1:
                 time.sleep(random.uniform(0.8, 1.6))   # be a polite guest
         prog.empty()
+        if names_changed:
+            _pf_save()
         msgs = []
-        skipped = len(codes) - len(todo)
-        if skipped:
-            msgs.append(("info", f"{skipped} scheme(s) skipped — no VR "
-                                 "fund code or page URL set."))
         if notes:
             msgs.append(("warning", "Fetched with caveats (edit the grid "
                                     "manually if needed):\n\n- "
@@ -1936,53 +2042,50 @@ with tabs[9]:
     if fetched_meta:
         dates = {m.get("as_of") for m in fetched_meta.values()
                  if m.get("as_of")}
-        st.caption(f"Fetched {len(fetched_meta)} scheme(s)"
+        st.caption(f"Fetched {len(fetched_meta)} fund(s)"
                    + (f" · portfolio as on {', '.join(sorted(dates))}"
                       if dates else ""))
-        named = [(name_of(universe, c),
-                  fetched_meta[str(c)].get("vr_name") or "?")
-                 for c in codes if str(c) in fetched_meta]
-        if any(v != "?" for _, v in named):
-            with st.expander("Cross-check: what VR calls each fetched code"):
-                table(pd.DataFrame(named, columns=["Watchlist scheme",
-                                                   "Fund name as per VR"]))
 
     # -- the review grid (every cell editable, like the spreadsheet) -- #
     section("Review grid")
-    st.caption("₹ **Value** = your invested amount per scheme (drives the "
-               "weights). Percentages are 0–100. Edit any cell — fetched "
-               "numbers are just prefills.")
-    seed = _pf_grid_df(codes, pf_values, pf_snaps)
-    npct = st.column_config.NumberColumn(format="%.2f", min_value=0.0)
-    edited = st.data_editor(
-        seed, key=f"pf_editor_{st.session_state.get('pf_nonce', 0)}",
-        hide_index=True, width="stretch", num_rows="fixed",
-        column_config={
-            "Scheme Name": st.column_config.TextColumn(disabled=True,
-                                                       width="medium"),
-            "Value": st.column_config.NumberColumn(format="localized",
-                                                   min_value=0.0),
-            "P/B": npct, "P/E": npct,
-            "Aum in cr": st.column_config.NumberColumn(format="localized",
-                                                       min_value=0.0),
-            **{c: npct for c in [*P.CAP_COLS, "Debt & Cash",
-                                 *P.SECTOR_COLS]},
-        })
-
-    val_changed = False
-    for c_idx, r in edited.iterrows():
-        v = 0.0 if pd.isna(r["Value"]) else float(r["Value"])
-        if pf_values.get(str(c_idx)) != v:
-            pf_values[str(c_idx)] = v
-            val_changed = True
-    if val_changed:
-        _pf_save()
-
     rows = []
-    for c_idx, r in edited.iterrows():
-        rows.append({"code": str(c_idx), "name": r["Scheme Name"],
-                     "value": r["Value"], "vr_url": vr_urls.get(str(c_idx)),
-                     **{k: r[k] for k in P.PARAM_COLS}})
+    if not pf_funds:
+        st.info("Add funds above to build the review grid.")
+    else:
+        st.caption("₹ **Value** = your invested amount per scheme (drives "
+                   "the weights). Percentages are 0–100. Edit any cell — "
+                   "fetched numbers are just prefills.")
+        seed = _pf_grid_df(pf_funds, pf_values, pf_snaps)
+        npct = st.column_config.NumberColumn(format="%.2f", min_value=0.0)
+        edited = st.data_editor(
+            seed, key=f"pf_editor_{st.session_state.get('pf_nonce', 0)}",
+            hide_index=True, width="stretch", num_rows="fixed",
+            column_config={
+                "Scheme Name": st.column_config.TextColumn(disabled=True,
+                                                           width="medium"),
+                "Value": st.column_config.NumberColumn(format="localized",
+                                                       min_value=0.0),
+                "P/B": npct, "P/E": npct,
+                "Aum in cr": st.column_config.NumberColumn(
+                    format="localized", min_value=0.0),
+                **{c: npct for c in [*P.CAP_COLS, "Debt & Cash",
+                                     *P.SECTOR_COLS]},
+            })
+
+        val_changed = False
+        for c_idx, r in edited.iterrows():
+            v = 0.0 if pd.isna(r["Value"]) else float(r["Value"])
+            if pf_values.get(str(c_idx)) != v:
+                pf_values[str(c_idx)] = v
+                val_changed = True
+        if val_changed:
+            _pf_save()
+
+        for c_idx, r in edited.iterrows():
+            rows.append({"code": str(c_idx), "name": r["Scheme Name"],
+                         "value": r["Value"],
+                         "vr_url": f"{VP.VR_BASE}/funds/{c_idx}/",
+                         **{k: r[k] for k in P.PARAM_COLS}})
     review = P.review_frame(rows)
     summary = P.weighted_summary(review)
     have_values = summary["Value"] > 0
@@ -2090,7 +2193,7 @@ with tabs[9]:
                 st.warning("No scheme rows found under the header row.")
             elif imp:
                 matched = 0
-                cands = [(name_of(universe, c), str(c)) for c in codes]
+                cands = [(nm, str(fc)) for fc, nm in pf_funds.items()]
                 for row in imp["rows"]:
                     code_m, score = H._best_core_match(
                         H._core_tokens(row["name"]), cands)
@@ -2102,7 +2205,7 @@ with tabs[9]:
                     f"{len(imp['rows'])} scheme(s) · total "
                     f"₹{tot_val:,.0f}"
                     + (f" · as on {imp['as_on']}" if imp["as_on"] else "")
-                    + f" · {matched} matched to watchlist schemes"
+                    + f" · {matched} matched to funds in the review"
                     + ("" if matched == len(imp["rows"]) else
                        " (unmatched rows still count in snapshot "
                        "comparisons, but won't load into the grid)"))

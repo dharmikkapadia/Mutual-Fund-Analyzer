@@ -56,11 +56,15 @@ def save(watchlists: dict) -> None:
 
 # ---- PF Review persistence (same browser-first strategy as watchlists) ---- #
 PF_FILE = APP_DIR / "pf_review.json"
-PF_DEFAULT: dict = {"snapshots": {}, "vr_urls": {}, "values": {}}
+# "funds" is the review's own fund registry {vr_code: scheme name} — the
+# review list is independent of the watchlist. "vr_urls" is the legacy
+# watchlist-keyed layout, kept only so old records migrate on first render.
+PF_DEFAULT: dict = {"snapshots": {}, "vr_urls": {}, "values": {},
+                    "funds": {}}
 
 
 def load_pf() -> dict:
-    """Monthly-review data: snapshots, VR page urls and invested values."""
+    """Monthly-review data: fund registry, snapshots and invested values."""
     if not BROWSER_ONLY and PF_FILE.exists():
         try:
             data = json.loads(PF_FILE.read_text())
