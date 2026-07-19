@@ -43,6 +43,15 @@ try:  # bs4 is required for the P/B, P/E and AUM fragments
 except ImportError:  # pragma: no cover
     BeautifulSoup = None
 
+# curl_cffi impersonates a real Chrome TLS/HTTP2 fingerprint — Cloudflare
+# challenges are triggered largely by the client fingerprint, so this is the
+# strongest login-free client available and is preferred when installed.
+try:
+    from curl_cffi import requests as curl_requests
+    _HAS_CURL_CFFI = True
+except Exception:  # pragma: no cover  # noqa: BLE001
+    _HAS_CURL_CFFI = False
+
 # cloudscraper clears Cloudflare's basic JS challenge if it ever appears.
 # Pure-Python and optional: without it the module uses plain requests.
 try:
@@ -88,25 +97,49 @@ def _secret_proxy() -> str | None:
         return None
 
 
+def _curl_session():
+    """curl_cffi session impersonating the newest Chrome this build knows."""
+    for target in ("chrome", "chrome124", "chrome120", "chrome110"):
+        try:
+            return curl_requests.Session(impersonate=target)
+        except Exception:  # noqa: BLE001 — unknown target on old versions
+            continue
+    return None
+
+
+def _is_curl(sess) -> bool:
+    return type(sess).__module__.startswith("curl_cffi")
+
+
 def create_session():
-    """A requests-compatible session — cloudscraper when available; routed
-    through the [vr] proxy secret when one is configured."""
-    if _HAS_CLOUDSCRAPER:
+    """A requests-compatible session, best available client first:
+    curl_cffi (real-Chrome TLS fingerprint) > cloudscraper > requests.
+    Routed through the [vr] proxy secret when one is configured."""
+    sess = _curl_session() if _HAS_CURL_CFFI else None
+    if sess is None and _HAS_CLOUDSCRAPER:
         sess = cloudscraper.create_scraper(
             browser={"browser": "chrome", "platform": "windows",
                      "mobile": False})
-    else:
+    if sess is None:
         sess = requests.Session()
-    sess.headers.update({"User-Agent": USER_AGENT,
-                         "Accept-Language": "en-US,en;q=0.9"})
+    if not _is_curl(sess):
+        # curl_cffi's impersonation supplies its own coherent header set;
+        # only the plain clients need a hand-rolled UA
+        sess.headers.update({"User-Agent": USER_AGENT,
+                             "Accept-Language": "en-US,en;q=0.9"})
     proxy = _secret_proxy()
     if proxy:
         sess.proxies.update({"http": proxy, "https": proxy})
     return sess
 
 
-def session_kind() -> str:
-    kind = "cloudscraper" if _HAS_CLOUDSCRAPER else "requests"
+def session_kind(sess=None) -> str:
+    if sess is not None:
+        kind = ("curl_cffi/chrome-tls" if _is_curl(sess)
+                else type(sess).__module__.split(".")[0])
+    else:
+        kind = ("curl_cffi/chrome-tls" if _HAS_CURL_CFFI
+                else "cloudscraper" if _HAS_CLOUDSCRAPER else "requests")
     return kind + (" + proxy" if _secret_proxy() else "")
 
 
@@ -140,16 +173,20 @@ BLOCKED_MSG = (
     "export all work fine on this host.")
 
 
-def _headers(code: str, as_json: bool, xhr: bool = False) -> dict:
+def _headers(sess, code: str, as_json: bool, xhr: bool = False) -> dict:
+    """Request headers. curl_cffi sessions get only the request-specific
+    ones — the impersonation layer supplies a UA/sec-ch set that matches
+    its TLS fingerprint, and overriding it would break the disguise."""
     h = {
         "Accept": ("application/json, text/plain, */*" if as_json else
                    "text/html,application/xhtml+xml,application/xml;q=0.9,"
                    "*/*;q=0.8"),
         "Referer": f"{VR_BASE}/funds/{code}/",
-        "User-Agent": USER_AGENT,
-        "Accept-Language": "en-US,en;q=0.9",
-        **_BROWSER_HEADERS,
     }
+    if not _is_curl(sess):
+        h.update({"User-Agent": USER_AGENT,
+                  "Accept-Language": "en-US,en;q=0.9",
+                  **_BROWSER_HEADERS})
     if xhr:
         h["X-Requested-With"] = "XMLHttpRequest"
     return h
@@ -159,7 +196,7 @@ def _get(sess, url: str, code: str, as_json: bool, xhr: bool = False):
     """GET with a small retry loop for transient errors. A 403/503 or a
     bot-check page raises VRBlocked immediately — no retries, it never
     clears within a request loop. Returns parsed JSON or text."""
-    headers = _headers(code, as_json, xhr)
+    headers = _headers(sess, code, as_json, xhr)
     last: Exception = VRError("no attempt made")
     for attempt in range(3):
         try:
@@ -518,11 +555,11 @@ def peek_fund(sess, code) -> tuple[str, str]:
 def probe_vr(sess, code: str = "16026") -> tuple[bool, str]:
     """One request -> (ok, human-readable diagnosis) of whether VR answers
     this host at all. Used by the UI's 'Test VR access' button."""
-    client = f"client: {session_kind()}"
+    client = f"client: {session_kind(sess)}"
     url = f"{VR_BASE}/api/funds/asset-allocation-chart/{code}"
     try:
-        r = sess.get(url, timeout=TIMEOUT, headers=_headers(code, True))
-    except requests.RequestException as e:
+        r = sess.get(url, timeout=TIMEOUT, headers=_headers(sess, code, True))
+    except Exception as e:  # noqa: BLE001 — curl_cffi raises its own types
         return False, f"Could not reach Value Research ({client}): {e}"
     if r.status_code == 200:
         try:
