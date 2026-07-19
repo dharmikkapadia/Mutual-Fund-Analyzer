@@ -593,9 +593,33 @@ def peek_fund(sess, code) -> tuple[str, str]:
 
 
 def probe_vr(sess, code: str = "16026") -> tuple[bool, str]:
-    """One request -> (ok, human-readable diagnosis) of whether VR answers
-    this host at all. Used by the UI's 'Test VR access' button."""
+    """One or two requests -> (ok, human-readable diagnosis) of whether VR
+    answers this host. With a proxy configured, a neutral site is checked
+    first so 'the proxy is broken' and 'VR refuses us' are told apart —
+    and the proxy's egress IP is shown. Used by 'Test VR access'."""
     client = f"client: {session_kind(sess)}"
+    if _secret_proxy():
+        try:
+            r0 = sess.get("https://api.ipify.org?format=json", timeout=15)
+            ip = ""
+            try:
+                ip = str(r0.json().get("ip", ""))
+            except Exception:  # noqa: BLE001
+                pass
+            if ip:
+                client += f", proxy egress IP {ip}"
+        except Exception as e:  # noqa: BLE001
+            return False, (
+                f"The proxy itself is not answering ({client}): {e}. "
+                "VR was never reached, so fix the proxy first. Check: "
+                "(1) host/port are exactly as the provider lists them; "
+                "(2) username+password auth is ENABLED on the plan — "
+                "IP-whitelist auth cannot work from Streamlit Cloud, whose "
+                "outbound IP changes; (3) the port's protocol — if it is a "
+                "SOCKS port, add proxy_scheme = \"socks5\" under [vr]; "
+                "(4) the same credentials work from your own PC (e.g. "
+                "curl -x \"http://USER:PASS@HOST:PORT\" "
+                "https://api.ipify.org).")
     url = f"{VR_BASE}/api/funds/asset-allocation-chart/{code}"
     try:
         r = sess.get(url, timeout=TIMEOUT, headers=_headers(sess, code, True))
