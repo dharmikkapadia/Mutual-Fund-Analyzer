@@ -13,7 +13,9 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import random
 import re
+import time
 
 import numpy as np
 import pandas as pd
@@ -28,6 +30,7 @@ import pf_review as P
 import returns as R
 import store
 import vr_data as V
+import vr_public as VP
 
 # --------------------------------------------------------------------------- #
 # Viewing modes — each defines the full token set; native Streamlit widget
@@ -1778,77 +1781,31 @@ with tabs[9]:
     st.caption(
         "The watchlist as your real portfolio: enter each scheme's invested "
         "value, pull its month-end parameters (P/B, P/E, AUM, market-cap "
-        "split, sectors) from its Value Research page, and read the "
-        "**value-weighted** portfolio aggregates — the app version of the "
-        "monthly MF Portfolio Review spreadsheet. Every cell stays editable, "
-        "so the tab also works fully manually without a VR login.")
+        "split, sectors) from Value Research's **public** data endpoints — "
+        "no VR account or login involved — and read the **value-weighted** "
+        "portfolio aggregates: the app version of the monthly MF Portfolio "
+        "Review spreadsheet. Every cell stays editable, so the tab also "
+        "works fully manually.")
 
     pf = st.session_state.pf_data
     vr_urls: dict = pf.setdefault("vr_urls", {})
     pf_values: dict = pf.setdefault("values", {})
     pf_snaps: dict = pf.setdefault("snapshots", {})
-    sess = st.session_state.get("vr_session")
 
-    # -- Value Research connection (credentials live in memory only) -- #
-    with st.expander("Value Research login",
-                     expanded=sess is None and not pf_snaps):
-        st.caption(
-            "Uses **your own** VR account to read fund-portfolio pages. "
-            "Credentials are kept in this session's memory only — never "
-            "stored, never synced. **Cookie-paste is the reliable option**: "
-            "VR tends to treat scripted email/password logins as guests "
-            "and withholds portfolio data. In a logged-in browser tab: "
-            "DevTools (F12) → Network → click the fund-page request → "
-            "Request Headers → copy the whole `Cookie:` value.")
-        lc1, lc2 = st.columns(2)
-        vr_email = lc1.text_input("VR email", key="vr_email",
-                                  autocomplete="off")
-        vr_pass = lc2.text_input("VR password", key="vr_pass",
-                                 type="password", autocomplete="off")
-        vr_cookie = st.text_input("…or paste a logged-in Cookie header",
-                                  key="vr_cookie", type="password")
-        if store.BROWSER_ONLY:
-            st.warning(
-                "This looks like a **cloud deployment** — Value Research "
-                "blocks fetches from cloud-server IPs, so the Fetch button "
-                "will fail here. Run the app on your own machine for the "
-                "monthly fetch; manual entry, snapshots and the Excel "
-                "export all still work on this host.")
-        cb1, cb2 = st.columns([1, 3])
-        if cb1.button("Connect", type="primary", key="vr_connect"):
-            try:
-                _s = V.VRSession()
-                if vr_cookie.strip():
-                    _s.set_cookie_header(vr_cookie)
-                else:
-                    with st.spinner("Logging in to Value Research…"):
-                        _s.login(vr_email.strip(), vr_pass)
-                with st.spinner("Verifying the session with VR…"):
-                    _ok, _why = _s.verify()
-                if _ok:
-                    st.session_state.vr_session = _s
-                    sess = _s
-                    st.success("Connected — VR accepts this session.")
-                else:
-                    st.error(_why)
-            except V.VRError as e:
-                st.error(str(e))
-        if sess is not None:
-            cb2.caption("✅ Session active. Fetches use polite delays "
-                        "(~2 s per fund).")
-
-    # -- scheme rows: invested value lives in the grid; VR page per scheme -- #
+    # -- scheme rows: invested value lives in the grid; VR code per scheme -- #
     section("Fund pages on Value Research")
-    st.caption("One URL per scheme (e.g. `…/funds/16026/hdfc-flexi-cap-fund"
+    st.caption("One VR fund page URL **or just the numeric fund code** per "
+               "scheme (e.g. `16026` or `…/funds/16026/hdfc-flexi-cap-fund"
                "-direct-plan/`). Remembered across sessions. **Auto-find** "
-               "fills the blanks via VR search when connected.")
+               "fills the blanks via VR search.")
     url_changed = False
     _unonce = st.session_state.get("pf_url_nonce", 0)
     for c in codes:
         u = st.text_input(
             name_of(universe, c), key=f"pfu_{_unonce}_{c}",
             value=vr_urls.get(str(c), ""),
-            placeholder="https://www.valueresearchonline.com/funds/…")
+            placeholder="fund code (e.g. 16026) or "
+                        "https://www.valueresearchonline.com/funds/…")
         if u.strip() != vr_urls.get(str(c), ""):
             vr_urls[str(c)] = u.strip()
             url_changed = True
@@ -1856,16 +1813,17 @@ with tabs[9]:
         _pf_save()
 
     ac1, ac2 = st.columns([1, 1])
-    if ac1.button("Auto-find VR pages", disabled=sess is None,
-                  help="Search VR for schemes whose URL is blank."):
+    if ac1.button("Auto-find VR pages",
+                  help="Search VR for schemes whose URL/code is blank."):
         misses = []
+        finder = V.VRSession()          # unauthenticated — search is public
         with st.spinner("Searching Value Research…"):
             for c in codes:
                 if vr_urls.get(str(c)):
                     continue
                 nm = name_of(universe, c)
                 try:
-                    cands = sess.search_funds(nm)
+                    cands = finder.search_funds(nm)
                 except Exception as e:  # noqa: BLE001
                     misses.append(f"{nm}: search failed ({e})")
                     continue
@@ -1890,52 +1848,62 @@ with tabs[9]:
         st.rerun()
 
     if ac2.button("Fetch from Value Research", type="primary",
-                  disabled=sess is None,
-                  help="Pull P/B, P/E, AUM, cap split and sectors for every "
-                       "scheme that has a VR page set."):
+                  help="Pull P/B, P/E, AUM, cap split and sectors from VR's "
+                       "public endpoints for every scheme that has a fund "
+                       "code or page URL set."):
         fetched = st.session_state.setdefault("pf_fetched", {})
         errs, notes = [], []
+        for c in codes:
+            ref = vr_urls.get(str(c), "").strip()
+            if ref and VP.fund_code(ref) is None:
+                errs.append(f"{name_of(universe, c)}: no numeric fund code "
+                            f"in '{ref}' — paste the VR fund page URL or "
+                            "the code itself.")
+        todo = [(c, VP.fund_code(vr_urls.get(str(c), ""))) for c in codes]
+        todo = [(c, fid) for c, fid in todo if fid]
+        vp_sess = VP.create_session()
         prog = st.progress(0.0, text="Fetching from Value Research…")
-        todo = [c for c in codes if vr_urls.get(str(c))]
-        blocked_streak = 0
-        for i, c in enumerate(todo):
+        dead_streak = 0
+        for i, (c, fid) in enumerate(todo):
             nm = name_of(universe, c)
             prog.progress((i + 1) / max(1, len(todo)), text=f"VR: {nm}")
             try:
-                prm = sess.fetch_fund(vr_urls[str(c)])
-                fetched[str(c)] = {"row": P.params_to_row(prm),
-                                   "as_of": prm.get("as_of")}
-                blocked_streak = 0
-                if prm.get("extra_sectors"):
-                    ex = ", ".join(f"{k} {v:.2f}%" for k, v
-                                   in prm["extra_sectors"].items())
-                    notes.append(f"{nm}: unmapped sector rows — {ex}")
-                if prm.get("login_note"):
-                    notes.append(f"{nm}: {prm['login_note']}")
+                prm = VP.fetch_fund(vp_sess, fid)
             except Exception as e:  # noqa: BLE001
                 errs.append(f"{nm}: {e}")
-                # VR refusing one fund means it will refuse them all —
-                # stop instead of hammering a blocked session
-                if "403" in str(e) or "503" in str(e):
-                    blocked_streak += 1
-                    if blocked_streak >= 2:
-                        errs.append(
-                            "Stopped: VR is refusing every request. Copy a "
-                            "**fresh** Cookie header (the Cloudflare part "
-                            "expires within ~30 minutes) and reconnect — "
-                            "and if this app runs on a cloud host, fetch "
-                            "from a locally-run app instead.")
-                        break
-                else:
-                    blocked_streak = 0
+                # every endpoint failing for one fund means VR is refusing
+                # this host — stop instead of hammering a blocked server
+                dead_streak += 1
+                if dead_streak >= 2:
+                    errs.append(
+                        "Stopped: VR is refusing every request from this "
+                        "host (bot protection). Try again in a few "
+                        "minutes; if it keeps failing on a cloud "
+                        "deployment, run the fetch from a locally-run "
+                        "app — manual entry, snapshots and the Excel "
+                        "export all still work here.")
+                    break
+                continue
+            dead_streak = 0
+            fetched[str(c)] = {"row": P.params_to_row(prm),
+                               "as_of": prm.get("as_of"),
+                               "vr_name": prm.get("fund_name")}
+            if prm.get("extra_sectors"):
+                ex = ", ".join(f"{k} {v:.2f}%" for k, v
+                               in prm["extra_sectors"].items())
+                notes.append(f"{nm}: unmapped sector rows — {ex}")
+            for w in prm.get("warnings", []):
+                notes.append(f"{nm}: {w}")
+            if i < len(todo) - 1:
+                time.sleep(random.uniform(0.8, 1.6))   # be a polite guest
         prog.empty()
         msgs = []
         skipped = len(codes) - len(todo)
         if skipped:
             msgs.append(("info", f"{skipped} scheme(s) skipped — no VR "
-                                 "page set."))
+                                 "fund code or page URL set."))
         if notes:
-            msgs.append(("warning", "Left out of the sector columns (add "
+            msgs.append(("warning", "Fetched with caveats (edit the grid "
                                     "manually if needed):\n\n- "
                                     + "\n- ".join(notes)))
         if errs:
@@ -1957,6 +1925,13 @@ with tabs[9]:
         st.caption(f"Fetched {len(fetched_meta)} scheme(s)"
                    + (f" · portfolio as on {', '.join(sorted(dates))}"
                       if dates else ""))
+        named = [(name_of(universe, c),
+                  fetched_meta[str(c)].get("vr_name") or "?")
+                 for c in codes if str(c) in fetched_meta]
+        if any(v != "?" for _, v in named):
+            with st.expander("Cross-check: what VR calls each fetched code"):
+                table(pd.DataFrame(named, columns=["Watchlist scheme",
+                                                   "Fund name as per VR"]))
 
     # -- the review grid (every cell editable, like the spreadsheet) -- #
     section("Review grid")
