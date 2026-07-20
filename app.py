@@ -1948,29 +1948,6 @@ with tabs[9]:
                     cdf.loc[f"Δ {b} vs {a}"] = cdf.loc[b] - cdf.loc[a]
                 table(cdf.reset_index(names="Month"))
 
-            # scheme-level view of the same months — the aggregates say
-            # what the portfolio did; this shows which schemes did it
-            svals = P.scheme_matrix(pf_snaps, sorted(pick))
-            if not svals.dropna(how="all").empty:
-                st.caption("**Scheme by scheme** — invested value (₹) "
-                           "per saved month; schemes are matched across "
-                           "months by name (or VR code where saved).")
-                table(svals.reset_index())
-                vfig = go.Figure()
-                for vi, mk in enumerate(svals.columns):
-                    vfig.add_trace(go.Bar(
-                        y=list(svals.index)[::-1],
-                        x=svals[mk].values[::-1], name=mk,
-                        orientation="h",
-                        marker_color=SERIES[vi % len(SERIES)],
-                        hovertemplate=mk + " · %{y}: ₹%{x:,.0f}"
-                                      "<extra></extra>"))
-                vfig.update_layout(barmode="group")
-                tv(vfig, min(720, max(240, 60 + 20 * len(svals)
-                                      * len(svals.columns))),
-                   legend=True, unified=False, spikes=False)
-                chart(vfig)
-
         # -- compare between dates: scheme-by-scheme A vs B -- #
         section("Compare between dates")
         st.caption("Pick two saved snapshots and compare them **scheme by "
