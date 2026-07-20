@@ -1948,24 +1948,14 @@ with tabs[9]:
                     cdf.loc[f"Δ {b} vs {a}"] = cdf.loc[b] - cdf.loc[a]
                 table(cdf.reset_index(names="Month"))
 
-            # scheme-level view of the same months, for ANY column —
-            # the aggregates say what the portfolio did; this shows
-            # which schemes did it
-            sfield = st.selectbox(
-                "Scheme-by-scheme column",
-                [P.VALUE_COL, P.WEIGHT_FIELD, *P.PARAM_COLS],
-                key="pf_cmp_field",
-                help="Lay any workbook column out per scheme across the "
-                     "picked months — invested value, portfolio weight "
-                     "or any parameter (P/B, P/E, sectors…).")
-            svals = P.scheme_matrix(pf_snaps, sorted(pick), sfield)
+            # scheme-level view of the same months — the aggregates say
+            # what the portfolio did; this shows which schemes did it
+            svals = P.scheme_matrix(pf_snaps, sorted(pick))
             if not svals.dropna(how="all").empty:
-                st.caption(f"**Scheme by scheme — {sfield}** per saved "
-                           "month; schemes are matched across months by "
-                           "name (or VR code where saved).")
+                st.caption("**Scheme by scheme** — invested value (₹) "
+                           "per saved month; schemes are matched across "
+                           "months by name (or VR code where saved).")
                 table(svals.reset_index())
-                _hfmt = ("₹%{x:,.0f}" if sfield == P.VALUE_COL
-                         else "%{x:,.2f}")
                 vfig = go.Figure()
                 for vi, mk in enumerate(svals.columns):
                     vfig.add_trace(go.Bar(
@@ -1973,8 +1963,8 @@ with tabs[9]:
                         x=svals[mk].values[::-1], name=mk,
                         orientation="h",
                         marker_color=SERIES[vi % len(SERIES)],
-                        hovertemplate=mk + " · %{y}: " + _hfmt
-                                      + "<extra></extra>"))
+                        hovertemplate=mk + " · %{y}: ₹%{x:,.0f}"
+                                      "<extra></extra>"))
                 vfig.update_layout(barmode="group")
                 tv(vfig, min(720, max(240, 60 + 20 * len(svals)
                                       * len(svals.columns))),
