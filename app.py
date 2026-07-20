@@ -13,9 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
-import random
 import re
-import time
 
 import numpy as np
 import pandas as pd
@@ -29,8 +27,6 @@ import nav_data as D
 import pf_review as P
 import returns as R
 import store
-import vr_data as V
-import vr_public as VP
 
 # --------------------------------------------------------------------------- #
 # Viewing modes — each defines the full token set; native Streamlit widget
@@ -612,8 +608,8 @@ with st.sidebar:
     if cloud_sync.is_configured():
         with st.expander("☁️ Cloud sync (access anywhere)"):
             st.caption(
-                "Encrypt your watchlists **and PF-Review data** (monthly "
-                "snapshots, invested values, VR fund codes) with a "
+                "Encrypt your watchlists **and PF-Review data** (the "
+                "monthly review snapshots) with a "
                 "passphrase and sync them to a private store, so you can "
                 "load them on any device. The passphrase never leaves this "
                 "app and is **not recoverable** — if you lose it, the data "
@@ -1766,365 +1762,140 @@ with tabs[8]:
             st.info("Not enough overlapping history across the selected "
                     "schemes to blend.")
 
-# ---- PF Review (monthly Value Research parameters, value-weighted) ---- #
+# ---- PF Review (monthly workbook snapshots, value-weighted) ---- #
 def _pf_save() -> None:
     store.save_pf(st.session_state.pf_data)
-
-
-def _pf_grid_df(funds: dict, values: dict, snaps: dict) -> pd.DataFrame:
-    """Editor seed: fetched params, else the latest snapshot, else blanks.
-
-    `funds` is the review's own registry {vr_code: scheme name}.
-    """
-    latest = snaps.get(max(snaps)) if snaps else None
-    by_code = ({str(r.get("code")): r for r in P.snapshot_rows(latest)}
-               if latest else {})
-    fetched = st.session_state.get("pf_fetched", {})
-    recs = []
-    for c, nm in funds.items():
-        rec = {"Code": str(c), "Scheme Name": nm or f"Fund {c}",
-               "Value": float(values.get(str(c)) or 0.0)}
-        src = fetched.get(str(c), {}).get("row") or {
-            k: by_code.get(str(c), {}).get(k) for k in P.PARAM_COLS}
-        for k in P.PARAM_COLS:
-            v = src.get(k)
-            rec[k] = np.nan if v is None else v
-        recs.append(rec)
-    return pd.DataFrame(
-        recs, columns=["Code", "Scheme Name", "Value", *P.PARAM_COLS]
-    ).set_index("Code")
 
 
 with tabs[9]:
     section("Monthly portfolio review")
     st.caption(
-        "Your real portfolio, reviewed monthly — **independent of the "
-        "watchlist**: add each fund by its Value Research code once (it's "
-        "remembered), enter the invested value, pull the month-end "
-        "parameters (P/B, P/E, AUM, market-cap split, sectors) from VR's "
-        "**public** data endpoints — no VR account or login involved — and "
-        "read the **value-weighted** portfolio aggregates: the app version "
-        "of the monthly MF Portfolio Review spreadsheet. Every cell stays "
-        "editable, so the tab also works fully manually.")
+        "Your real portfolio, reviewed monthly — the app version of the "
+        "manual **MF Portfolio Review** spreadsheet. Keep one workbook per "
+        "month (one row per scheme: invested value, P/B, P/E, AUM, "
+        "large/mid/small-cap split, Debt & Cash, sector weights) and "
+        "upload it below as that month's snapshot. Every saved month can "
+        "then be viewed in full — each scheme with all its parameters and "
+        "the value-weighted total row — and set against the other months.")
 
     pf = st.session_state.pf_data
-    pf_funds: dict = pf.setdefault("funds", {})
-    pf_values: dict = pf.setdefault("values", {})
     pf_snaps: dict = pf.setdefault("snapshots", {})
-
-    # one-time migration: the old layout keyed VR codes/URLs by watchlist
-    # scheme ("vr_urls") — carry those into the review's own registry
-    if not pf_funds and pf.get("vr_urls"):
-        for _ac, _ref in pf["vr_urls"].items():
-            _fc = VP.fund_code(_ref)
-            if _fc and _fc not in pf_funds:
-                try:
-                    _nm = name_of(universe, int(_ac))
-                except (TypeError, ValueError):
-                    _nm = ""
-                pf_funds[_fc] = _nm or f"Fund {_fc}"
-                _v = pf_values.pop(str(_ac), None)
-                if _v:
-                    pf_values[_fc] = _v
-        pf["vr_urls"] = {}
-        if pf_funds:
-            _pf_save()
-
-    def _pf_touch() -> None:
-        """Persist the registry and reseed the grid editor."""
-        _pf_save()
-        st.session_state.pf_nonce = st.session_state.get("pf_nonce", 0) + 1
-
-    # -- the fund registry: add once by VR code, delete when sold -- #
-    section("Funds in the review")
-    st.caption("Add each fund by its **VR fund code** (the number in the "
-               "fund's valueresearchonline.com URL, e.g. `16026`) or by "
-               "pasting the fund page URL. The scheme name fills in from "
-               "Value Research, and the list is remembered (browser + "
-               "☁️ Cloud sync). Remove a fund when you no longer hold it — "
-               "saved monthly snapshots keep its history.")
-    _anonce = st.session_state.get("pf_add_nonce", 0)
-    nc1, nc2 = st.columns([3, 1])
-    new_ref = nc1.text_input(
-        "Add a fund", key=f"pf_addref_{_anonce}",
-        label_visibility="collapsed",
-        placeholder="fund code (e.g. 16026) or "
-                    "https://www.valueresearchonline.com/funds/…")
-    if nc2.button("➕ Add fund", width="stretch",
-                  disabled=not new_ref.strip()):
-        _fc = VP.fund_code(new_ref)
-        if not _fc:
-            st.session_state.pf_msgs = [
-                ("error", f"'{new_ref.strip()}' has no numeric VR fund "
-                          "code — enter the code itself or the fund "
-                          "page URL.")]
-        elif _fc in pf_funds:
-            st.session_state.pf_msgs = [
-                ("info", f"Code {_fc} is already in the review "
-                         f"({pf_funds[_fc]}).")]
-        else:
-            _nm = ""
-            try:
-                with st.spinner(f"Looking up code {_fc} on Value Research…"):
-                    _nm, _ = VP.peek_fund(VP.create_session(), _fc)
-            except Exception:  # noqa: BLE001 — name fills in on next fetch
-                pass
-            pf_funds[_fc] = _nm or f"Fund {_fc}"
-            _pf_touch()
-            st.session_state.pf_msgs = [
-                ("success", f"Added **{pf_funds[_fc]}** (code {_fc})."
-                 + ("" if _nm else " Name lookup failed — it will fill "
-                                  "in on the next fetch."))]
-        st.session_state.pf_add_nonce = _anonce + 1
-        st.rerun()
-
-    if not pf_funds:
-        st.info("No funds in the review yet — add your first VR fund code "
-                "above, or bulk-add below.")
-    for _fc, _fnm in list(pf_funds.items()):
-        rc1, rc2 = st.columns([6, 1])
-        rc1.markdown(f"**{_fnm}**  ·  code `{_fc}`")
-        if rc2.button("🗑 Remove", key=f"pf_del_{_fc}", width="stretch",
-                      help="Remove this fund from the review (already-"
-                           "saved monthly snapshots keep it)"):
-            pf_funds.pop(_fc, None)
-            pf_values.pop(str(_fc), None)
-            st.session_state.get("pf_fetched", {}).pop(str(_fc), None)
-            _pf_touch()
-            st.session_state.pf_msgs = [
-                ("success", f"Removed **{_fnm}** (code {_fc}). Past "
-                            "snapshots still include it.")]
-            st.rerun()
-
-    with st.expander("Bulk add — fund-codes CSV, or import the watchlist"):
-        st.caption("Upload a CSV with a **Fund Code** column (optional "
-                   "Scheme Name column) — the same template as the desktop "
-                   "fetcher. Names fill in from Value Research on the next "
-                   "fetch if the CSV has none.")
-        up_csv = st.file_uploader("Fund-codes CSV", type=["csv"],
-                                  key="pf_codes_csv",
-                                  label_visibility="collapsed")
-        if up_csv is not None and st.button("Add codes from CSV",
-                                            key="pf_csv_add"):
-            try:
-                specs = VP.read_codes_csv(up_csv.getvalue())
-            except Exception as e:  # noqa: BLE001
-                specs = []
-                st.error(f"Couldn't read that CSV: {e}")
-            if specs:
-                added = dupes = 0
-                for _fc, _nm in specs:
-                    if _fc in pf_funds:
-                        dupes += 1
-                    else:
-                        pf_funds[_fc] = _nm or f"Fund {_fc}"
-                        added += 1
-                _pf_touch()
-                st.session_state.pf_msgs = [
-                    ("success", f"Added {added} fund(s) from {up_csv.name}"
-                     + (f" ({dupes} already present)" if dupes else "")
-                     + ". Names without a CSV entry fill in from VR on "
-                       "the next fetch.")]
-                st.rerun()
-            elif up_csv is not None:
-                st.warning("No fund codes found — the CSV needs a 'Fund "
-                           "Code' column (or a plain list of codes).")
-        if codes:
-            st.caption("Or pull in the current watchlist's schemes — each "
-                       "VR code is found by name search.")
-            if st.button("Import watchlist schemes", key="pf_wl_import",
-                         help="Search VR for every watchlist scheme and "
-                              "add the matches to the review."):
-                misses, added = [], 0
-                finder = V.VRSession()   # unauthenticated — search is public
-                with st.spinner("Searching Value Research…"):
-                    for c in codes:
-                        nm = name_of(universe, c)
-                        try:
-                            cands = finder.search_funds(nm)
-                        except Exception as e:  # noqa: BLE001
-                            misses.append(f"{nm}: search failed ({e})")
-                            continue
-                        target = H._tokens(nm)
-                        best, score = None, 0.0
-                        for cn, cu in cands:
-                            sc = H._name_score(target, cn)
-                            if sc > score:
-                                best, score = (cn, cu), sc
-                        _fc = VP.fund_code(best[1]) if best else None
-                        if _fc and score >= 0.45:
-                            if _fc not in pf_funds:
-                                pf_funds[_fc] = best[0]
-                                added += 1
-                        else:
-                            misses.append(f"{nm}: no confident match "
-                                          f"(best {score:.2f})")
-                        time.sleep(random.uniform(0.3, 0.7))
-                _pf_touch()
-                msgs = ([("success",
-                          f"Imported {added} fund(s) from the watchlist.")]
-                        if added else [])
-                if misses:
-                    msgs.append(("warning", "Not imported — add these by "
-                                            "code manually:\n\n- "
-                                            + "\n- ".join(misses)))
-                st.session_state.pf_msgs = msgs
-                st.rerun()
-
-    fb1, fb2, _fb3 = st.columns([1.2, 1, 2])
-    fetch_clicked = fb1.button(
-        "Fetch from Value Research", type="primary", width="stretch",
-        disabled=not pf_funds,
-        help="Pull P/B, P/E, AUM, cap split and sectors from VR's "
-             "public endpoints for every fund in the review.")
-    if fb2.button("Test VR access", width="stretch",
-                  help="One quick request to check whether Value Research "
-                       "answers this server at all — handy on cloud hosts, "
-                       "where VR's bot protection often blocks the "
-                       "server's IP."):
-        with st.spinner("Probing Value Research…"):
-            _ok, _detail = VP.probe_vr(VP.create_session(),
-                                       next(iter(pf_funds), "16026"))
-        (st.success if _ok else st.error)(_detail)
-    if fetch_clicked:
-        fetched = st.session_state.setdefault("pf_fetched", {})
-        errs, notes = [], []
-        todo = list(pf_funds.items())
-        vp_sess = VP.create_session()
-        prog = st.progress(0.0, text="Fetching from Value Research…")
-        dead_streak = 0
-        names_changed = False
-        for i, (fid, nm) in enumerate(todo):
-            prog.progress((i + 1) / max(1, len(todo)),
-                          text=f"VR: {nm or fid}")
-            try:
-                prm = VP.fetch_fund(vp_sess, fid)
-            except VP.VRBlocked as e:
-                # VR is refusing this host outright — stop immediately
-                # instead of hammering a blocked server
-                errs.append(f"{nm or fid}: {e}")
-                if i < len(todo) - 1:
-                    errs.append("Stopped — the remaining funds were "
-                                "skipped ('Test VR access' re-checks "
-                                "this host any time).")
-                break
-            except Exception as e:  # noqa: BLE001
-                errs.append(f"{nm or fid}: {e}")
-                dead_streak += 1
-                if dead_streak >= 2:
-                    errs.append(
-                        "Stopped after repeated failures — check 'Test "
-                        "VR access' and try again later.")
-                    break
-                continue
-            dead_streak = 0
-            # VR's own scheme name is authoritative — refresh the registry
-            if prm.get("fund_name") and prm["fund_name"] != pf_funds.get(fid):
-                pf_funds[fid] = prm["fund_name"]
-                names_changed = True
-            nm = pf_funds.get(fid) or f"Fund {fid}"
-            fetched[str(fid)] = {"row": P.params_to_row(prm),
-                                 "as_of": prm.get("as_of")}
-            if prm.get("extra_sectors"):
-                ex = ", ".join(f"{k} {v:.2f}%" for k, v
-                               in prm["extra_sectors"].items())
-                notes.append(f"{nm}: unmapped sector rows — {ex}")
-            for w in prm.get("warnings", []):
-                notes.append(f"{nm}: {w}")
-            if i < len(todo) - 1:
-                time.sleep(random.uniform(0.8, 1.6))   # be a polite guest
-        prog.empty()
-        if names_changed:
-            _pf_save()
-        msgs = []
-        if notes:
-            msgs.append(("warning", "Fetched with caveats (edit the grid "
-                                    "manually if needed):\n\n- "
-                                    + "\n- ".join(notes)))
-        if errs:
-            msgs.append(("error", "Fetch failures:\n\n- "
-                                  + "\n- ".join(errs)))
-        st.session_state.pf_msgs = msgs
-        if fetched:
-            st.session_state.pf_nonce = st.session_state.get("pf_nonce",
-                                                             0) + 1
-        st.rerun()
 
     for _kind, _msg in st.session_state.pop("pf_msgs", []):
         getattr(st, _kind)(_msg)
 
-    fetched_meta = st.session_state.get("pf_fetched", {})
-    if fetched_meta:
-        dates = {m.get("as_of") for m in fetched_meta.values()
-                 if m.get("as_of")}
-        st.caption(f"Fetched {len(fetched_meta)} fund(s)"
-                   + (f" · portfolio as on {', '.join(sorted(dates))}"
-                      if dates else ""))
+    # -- input: one review workbook per month -- #
+    section("Add a month — upload the review workbook (.xlsx)")
+    st.caption(
+        "The workbook layout is the manual one (and what the Excel "
+        "download below produces): a 'Scheme Name' header row, then one "
+        "row per scheme with value, P/B, P/E, AUM, cap split, Debt & "
+        "Cash and sector columns. Snapshots persist in this browser"
+        + (" — ☁️ Cloud sync (sidebar) backs them up across devices."
+           if cloud_sync.is_configured() else "."))
+    up = st.file_uploader("Workbook", type=["xlsx"], key="pf_upload",
+                          label_visibility="collapsed")
+    if up is not None:
+        imp = None
+        try:
+            imp = P.parse_workbook(up.getvalue())
+        except Exception as e:  # noqa: BLE001
+            st.error(f"Couldn't read that workbook: {e}")
+        if imp and not imp["rows"]:
+            st.warning("No scheme rows found under the header row.")
+        elif imp:
+            tot_val = sum(r.get("value") or 0 for r in imp["rows"])
+            st.caption(f"{len(imp['rows'])} scheme(s) · total "
+                       f"₹{tot_val:,.0f}"
+                       + (f" · as on {imp['as_on']}" if imp["as_on"]
+                          else ""))
+            key_guess = (P.month_key_from_as_on(imp["as_on"])
+                         or dt.date.today().strftime("%Y-%m"))
+            ic1, ic2 = st.columns([1, 1.4], vertical_alignment="bottom")
+            imp_key = ic1.text_input("Save under month (YYYY-MM)",
+                                     value=key_guess, key="pf_imp_key")
+            if ic2.button("Save as monthly snapshot", type="primary",
+                          key="pf_imp_save"):
+                if not re.fullmatch(r"\d{4}-\d{2}", imp_key.strip()):
+                    st.error("Month must look like 2026-03.")
+                else:
+                    k = imp_key.strip()
+                    pf_snaps[k] = P.snapshot_pack(imp["rows"],
+                                                  imp["as_on"] or k)
+                    _pf_save()
+                    st.session_state.pf_msgs = [(
+                        "success",
+                        f"Imported {up.name} as snapshot {k} "
+                        f"({len(imp['rows'])} schemes).")]
+                    st.rerun()
 
-    # -- the review grid (every cell editable, like the spreadsheet) -- #
-    section("Review grid")
-    rows = []
-    if not pf_funds:
-        st.info("Add funds above to build the review grid.")
+    if not pf_snaps:
+        st.info("No months saved yet — upload your first review workbook "
+                "above.")
     else:
-        st.caption("₹ **Value** = your invested amount per scheme (drives "
-                   "the weights). Percentages are 0–100. Edit any cell — "
-                   "fetched numbers are just prefills.")
-        seed = _pf_grid_df(pf_funds, pf_values, pf_snaps)
-        npct = st.column_config.NumberColumn(format="%.2f", min_value=0.0)
-        edited = st.data_editor(
-            seed, key=f"pf_editor_{st.session_state.get('pf_nonce', 0)}",
-            hide_index=True, width="stretch", num_rows="fixed",
-            column_config={
-                "Scheme Name": st.column_config.TextColumn(disabled=True,
-                                                           width="medium"),
-                "Value": st.column_config.NumberColumn(format="localized",
-                                                       min_value=0.0),
-                "P/B": npct, "P/E": npct,
-                "Aum in cr": st.column_config.NumberColumn(
-                    format="localized", min_value=0.0),
-                **{c: npct for c in [*P.CAP_COLS, "Debt & Cash",
-                                     *P.SECTOR_COLS]},
-            })
+        months = sorted(pf_snaps, reverse=True)
 
-        val_changed = False
-        for c_idx, r in edited.iterrows():
-            v = 0.0 if pd.isna(r["Value"]) else float(r["Value"])
-            if pf_values.get(str(c_idx)) != v:
-                pf_values[str(c_idx)] = v
-                val_changed = True
-        if val_changed:
+        def _mk_label(mk: str) -> str:
+            _ao = (pf_snaps.get(mk) or {}).get("as_on")
+            return f"{mk} · as on {_ao}" if _ao else mk
+
+        # -- one month in full: every scheme, every parameter -- #
+        section("Monthly review — schemes & parameters")
+        mv1, mv2, mv3 = st.columns([2, 1.2, 1],
+                                   vertical_alignment="bottom")
+        view_pick = mv1.selectbox("Month to view", months,
+                                  key="pf_view_pick",
+                                  format_func=_mk_label)
+        vrows = P.snapshot_rows(pf_snaps[view_pick])
+        vdf = P.review_frame(vrows)
+        vsum = P.weighted_summary(vdf)
+        vason = pf_snaps[view_pick].get("as_on") or view_pick
+        mv2.download_button(
+            "⬇ Excel (this month)",
+            data=P.to_excel_bytes(vdf, vason),
+            file_name=f"MF_Portfolio_Review_{view_pick}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument."
+                 "spreadsheetml.sheet",
+            width="stretch",
+            help="Same layout and live formulas as the manual workbook.")
+        if mv3.button("🗑 Delete", key="pf_view_del", width="stretch",
+                      help="Remove this month's snapshot permanently."):
+            pf_snaps.pop(view_pick, None)
             _pf_save()
+            st.session_state.pf_msgs = [
+                ("success", f"Deleted snapshot {view_pick}.")]
+            st.rerun()
 
-        for c_idx, r in edited.iterrows():
-            rows.append({"code": str(c_idx), "name": r["Scheme Name"],
-                         "value": r["Value"],
-                         "vr_url": f"{VP.VR_BASE}/funds/{c_idx}/",
-                         **{k: r[k] for k in P.PARAM_COLS}})
-    review = P.review_frame(rows)
-    summary = P.weighted_summary(review)
-    have_values = summary["Value"] > 0
-
-    if not have_values:
-        st.info("Enter invested values in the grid to see the weighted "
-                "portfolio aggregates.")
-    else:
-        section("Weighted portfolio aggregates")
-        weights = review["Value"] / summary["Value"] * 100.0
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Total value", f"₹{summary['Value']:,.0f}")
-        m2.metric("Weighted P/E", "—" if pd.isna(summary["P/E"])
-                  else f"{summary['P/E']:.2f}")
-        m3.metric("Weighted P/B", "—" if pd.isna(summary["P/B"])
-                  else f"{summary['P/B']:.2f}")
-        m4.metric("Weighted AUM", "—" if pd.isna(summary["Aum in cr"])
-                  else f"₹{summary['Aum in cr']:,.0f} cr")
-        tot = summary[P.TOTAL_COL]
-        m5.metric("Sectors + cash", "—" if pd.isna(tot) else f"{tot:.1f}%",
+        m1.metric("Total value", f"₹{vsum['Value']:,.0f}")
+        m2.metric("Weighted P/E", "—" if pd.isna(vsum["P/E"])
+                  else f"{vsum['P/E']:.2f}")
+        m3.metric("Weighted P/B", "—" if pd.isna(vsum["P/B"])
+                  else f"{vsum['P/B']:.2f}")
+        m4.metric("Weighted AUM", "—" if pd.isna(vsum["Aum in cr"])
+                  else f"₹{vsum['Aum in cr']:,.0f} cr")
+        vtot = vsum[P.TOTAL_COL]
+        m5.metric("Sectors + cash", "—" if pd.isna(vtot)
+                  else f"{vtot:.1f}%",
                   help="Debt & Cash + all sector weights — should land "
                        "near 100% if the data is complete.")
 
-        cap_vals = [summary[c] for c in [*P.CAP_COLS, "Debt & Cash"]]
+        vfull = vdf.copy()
+        vfull.insert(2, "Weight %",
+                     (vdf["Value"] / vsum["Value"] * 100.0).round(2)
+                     if vsum["Value"] > 0 else np.nan)
+        vrow = {"Scheme Name": "◆ PORTFOLIO (weighted)",
+                "Weight %": 100.0,
+                **{k: vsum[k] for k in [P.VALUE_COL, *P.PARAM_COLS,
+                                        P.TOTAL_COL]}}
+        vfull = pd.concat([vfull, pd.DataFrame([vrow])],
+                          ignore_index=True)
+        table(vfull)
+        st.caption(f"Every scheme held in {view_pick} with all its "
+                   "parameters, and the value-weighted ◆ PORTFOLIO row — "
+                   "the workbook's summary row.")
+
+        cap_vals = [vsum[c] for c in [*P.CAP_COLS, "Debt & Cash"]]
         if not all(pd.isna(v) for v in cap_vals):
             cfig = go.Figure()
             for lbl, v, col in zip(
@@ -2134,16 +1905,18 @@ with tabs[9]:
                     x=[0.0 if pd.isna(v) else v], y=["Mix"], name=lbl,
                     orientation="h", marker_color=col,
                     hovertemplate=f"{lbl}: %{{x:.2f}}%<extra></extra>"))
-            cfig.update_layout(barmode="stack", showlegend=True, height=110,
+            cfig.update_layout(barmode="stack", showlegend=True,
+                               height=110,
                                margin=dict(l=0, r=0, t=0, b=0))
             tv(cfig, 110, unified=False, spikes=False)
             cfig.update_xaxes(visible=False)
             cfig.update_yaxes(visible=False)
             chart(cfig)
             st.caption("Market-cap mix of the whole portfolio (weighted "
-                       "Large / Mid / Small % of equity, plus Debt & Cash).")
+                       "Large / Mid / Small % of equity, plus Debt & "
+                       "Cash).")
 
-        sect = summary[P.SECTOR_COLS].dropna()
+        sect = vsum[P.SECTOR_COLS].dropna()
         sect = sect[sect > 0].sort_values(ascending=True)
         if not sect.empty:
             sfig = go.Figure(go.Bar(
@@ -2157,97 +1930,10 @@ with tabs[9]:
             st.caption("Weighted sector allocation (% of portfolio, "
                        "incl. the debt & cash drag).")
 
-        full = review.copy()
-        full.insert(2, "Weight %", weights.round(2))
-        srow = {"Scheme Name": "◆ PORTFOLIO (weighted)", "Weight %": 100.0,
-                **{k: summary[k] for k in [P.VALUE_COL, *P.PARAM_COLS,
-                                           P.TOTAL_COL]}}
-        full = pd.concat([full, pd.DataFrame([srow])], ignore_index=True)
-        with st.expander("Full review table (as it will export)"):
-            table(full)
-
-    # -- monthly snapshots + Excel export -- #
-    section("Monthly snapshots & export")
-    sc1, sc2, sc3 = st.columns([1.2, 1, 1.8])
-    as_on = sc1.date_input("As on", value=dt.date.today(),
-                           key="pf_as_on", format="DD/MM/YYYY")
-    mkey = as_on.strftime("%Y-%m")
-    if sc2.button(f"Save snapshot · {mkey}", disabled=not have_values):
-        pf_snaps[mkey] = P.snapshot_pack(rows, as_on.strftime("%d/%m/%Y"))
-        _pf_save()
-        st.success(f"Saved {mkey} ({len(rows)} schemes). Snapshots persist "
-                   "in this browser"
-                   + (" — use ☁️ Cloud sync (sidebar) to back them up "
-                      "across devices." if cloud_sync.is_configured()
-                      else "."))
-    if have_values:
-        sc3.download_button(
-            "⬇ Download Excel (PF Review)",
-            data=P.to_excel_bytes(review, as_on.strftime("%d/%m/%Y")),
-            file_name=f"MF_Portfolio_Review_as_on_"
-                      f"{as_on.strftime('%d%m%Y')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument."
-                 "spreadsheetml.sheet",
-            help="Same layout and live formulas as the manual workbook.")
-
-    with st.expander("Import a review workbook (.xlsx) as a snapshot"):
-        st.caption(
-            "Upload a manually maintained **MF Portfolio Review** workbook "
-            "(one row per scheme: value, P/B, P/E, AUM, cap split, Debt & "
-            "Cash, sector columns). It's stored as that month's snapshot, "
-            "so months that predate the app join the comparison history.")
-        up = st.file_uploader("Workbook", type=["xlsx"], key="pf_upload",
-                              label_visibility="collapsed")
-        if up is not None:
-            imp = None
-            try:
-                imp = P.parse_workbook(up.getvalue())
-            except Exception as e:  # noqa: BLE001
-                st.error(f"Couldn't read that workbook: {e}")
-            if imp and not imp["rows"]:
-                st.warning("No scheme rows found under the header row.")
-            elif imp:
-                matched = 0
-                cands = [(nm, str(fc)) for fc, nm in pf_funds.items()]
-                for row in imp["rows"]:
-                    code_m, score = H._best_core_match(
-                        H._core_tokens(row["name"]), cands)
-                    if code_m is not None and score >= 0.5:
-                        row["code"] = code_m
-                        matched += 1
-                tot_val = sum(r.get("value") or 0 for r in imp["rows"])
-                st.caption(
-                    f"{len(imp['rows'])} scheme(s) · total "
-                    f"₹{tot_val:,.0f}"
-                    + (f" · as on {imp['as_on']}" if imp["as_on"] else "")
-                    + f" · {matched} matched to funds in the review"
-                    + ("" if matched == len(imp["rows"]) else
-                       " (unmatched rows still count in snapshot "
-                       "comparisons, but won't load into the grid)"))
-                key_guess = (P.month_key_from_as_on(imp["as_on"])
-                             or dt.date.today().strftime("%Y-%m"))
-                ic1, ic2 = st.columns([1, 1.4])
-                imp_key = ic1.text_input("Save under month (YYYY-MM)",
-                                         value=key_guess, key="pf_imp_key")
-                if ic2.button("Save uploaded snapshot", type="primary",
-                              key="pf_imp_save"):
-                    if not re.fullmatch(r"\d{4}-\d{2}", imp_key.strip()):
-                        st.error("Month must look like 2026-03.")
-                    else:
-                        k = imp_key.strip()
-                        pf_snaps[k] = P.snapshot_pack(
-                            imp["rows"], imp["as_on"] or k)
-                        _pf_save()
-                        st.session_state.pf_msgs = [(
-                            "success",
-                            f"Imported {up.name} as snapshot {k} "
-                            f"({len(imp['rows'])} schemes).")]
-                        st.rerun()
-
-    if pf_snaps:
-        months = sorted(pf_snaps, reverse=True)
+        # -- compare saved months (aggregates + scheme by scheme) -- #
+        section("Compare saved months")
         pick = st.multiselect(
-            "Compare saved months (weighted aggregates)", months,
+            "Months to compare (weighted aggregates)", months,
             default=months[:2], key="pf_cmp")
         if pick:
             comp = {}
@@ -2262,14 +1948,24 @@ with tabs[9]:
                     cdf.loc[f"Δ {b} vs {a}"] = cdf.loc[b] - cdf.loc[a]
                 table(cdf.reset_index(names="Month"))
 
-            # scheme-level view of the same months — the aggregates above
-            # say what the portfolio did; this shows which schemes did it
-            svals = P.scheme_matrix(pf_snaps, sorted(pick))
+            # scheme-level view of the same months, for ANY column —
+            # the aggregates say what the portfolio did; this shows
+            # which schemes did it
+            sfield = st.selectbox(
+                "Scheme-by-scheme column",
+                [P.VALUE_COL, P.WEIGHT_FIELD, *P.PARAM_COLS],
+                key="pf_cmp_field",
+                help="Lay any workbook column out per scheme across the "
+                     "picked months — invested value, portfolio weight "
+                     "or any parameter (P/B, P/E, sectors…).")
+            svals = P.scheme_matrix(pf_snaps, sorted(pick), sfield)
             if not svals.dropna(how="all").empty:
-                st.caption("**Scheme by scheme** — invested value (₹) per "
-                           "saved month; schemes are matched across months "
-                           "by VR code, then by name.")
+                st.caption(f"**Scheme by scheme — {sfield}** per saved "
+                           "month; schemes are matched across months by "
+                           "name (or VR code where saved).")
                 table(svals.reset_index())
+                _hfmt = ("₹%{x:,.0f}" if sfield == P.VALUE_COL
+                         else "%{x:,.2f}")
                 vfig = go.Figure()
                 for vi, mk in enumerate(svals.columns):
                     vfig.add_trace(go.Bar(
@@ -2277,8 +1973,8 @@ with tabs[9]:
                         x=svals[mk].values[::-1], name=mk,
                         orientation="h",
                         marker_color=SERIES[vi % len(SERIES)],
-                        hovertemplate=mk + " · %{y}: ₹%{x:,.0f}"
-                                      "<extra></extra>"))
+                        hovertemplate=mk + " · %{y}: " + _hfmt
+                                      + "<extra></extra>"))
                 vfig.update_layout(barmode="group")
                 tv(vfig, min(720, max(240, 60 + 20 * len(svals)
                                       * len(svals.columns))),
@@ -2292,10 +1988,6 @@ with tabs[9]:
                    "month with the change in ₹ / % / percentage points, "
                    "plus any single parameter (P/B, P/E, cap split, "
                    "sectors).")
-
-        def _mk_label(mk: str) -> str:
-            _ao = (pf_snaps.get(mk) or {}).get("as_on")
-            return f"{mk} · as on {_ao}" if _ao else mk
 
         ab1, ab2, ab3 = st.columns([1.4, 1.4, 1.2],
                                    vertical_alignment="bottom")
@@ -2488,43 +2180,8 @@ with tabs[9]:
                                "weight, red gave it up (percentage "
                                "points).")
 
-        mc1, mc2 = st.columns([1.2, 1])
-        load_pick = mc1.selectbox("Load a snapshot into the grid", months,
-                                  key="pf_load_pick")
-        if mc2.button("Load / Delete…", key="pf_load_menu",
-                      help="Load fills the grid from the chosen month; "
-                           "delete removes it permanently."):
-            st.session_state.pf_manage = True
-        if st.session_state.get("pf_manage"):
-            b1, b2, b3 = st.columns(3)
-            if b1.button(f"Load {load_pick}", key="pf_do_load"):
-                by = {str(r.get("code")): r
-                      for r in P.snapshot_rows(pf_snaps[load_pick])}
-                st.session_state.pf_fetched = {
-                    k: {"row": {c: v.get(c) for c in P.PARAM_COLS},
-                        "as_of": pf_snaps[load_pick].get("as_on")}
-                    for k, v in by.items()}
-                for k, v in by.items():
-                    if v.get("value") is not None:
-                        pf_values[k] = v["value"]
-                st.session_state.pf_nonce = st.session_state.get(
-                    "pf_nonce", 0) + 1
-                st.session_state.pf_manage = False
-                _pf_save()
-                st.rerun()
-            if b2.button(f"Delete {load_pick}", key="pf_do_del"):
-                pf_snaps.pop(load_pick, None)
-                st.session_state.pf_manage = False
-                _pf_save()
-                st.rerun()
-            if b3.button("Cancel", key="pf_cancel"):
-                st.session_state.pf_manage = False
-                st.rerun()
-
-    st.caption("Fund parameters © Value Research — fetched with your own "
-               "account, for your personal review. Numbers land in an "
-               "editable grid, so the tab works without VR too (type the "
-               "values, exactly like the spreadsheet).")
+    st.caption("All numbers on this tab come from your uploaded review "
+               "workbooks — nothing is fetched from Value Research.")
 
 st.divider()
 st.caption("Data: AMFI NAVAll.txt (universe + latest NAV) and api.mfapi.in "

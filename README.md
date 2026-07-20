@@ -33,7 +33,7 @@ Subtle motion (fade-up transitions, hover lifts) respects
 | AMFI `NAVAll.txt` | Full scheme universe (code, ISIN, name, category, fund house) + latest NAV. Powers search, the watchlist picker and the daily NAV. Dead schemes (stale dates) are filtered out. |
 | `api.mfapi.in/mf/{code}` | Full daily NAV history per scheme — the basis of every returns calculation. Fetched on-demand and cached in-session. |
 | `rupeevest.com` (`get_holding_asset`) | Portfolio holdings, sector splits and fund facts (AUM, managers). Matched to scheme codes via the bundled `rupeevest_codes.csv`. Groww/Kuvera are automatic fallbacks; manual CSV upload is the last resort. |
-| `valueresearchonline.com` (public endpoints, **no login**) | Fund-level portfolio parameters for the **PF Review** tab: P/B, P/E, AUM, large/mid/small-cap split, debt & cash and sector allocation. Fetched per numeric fund code from the public chart/data endpoints the fund page itself loads (`/api/funds/port-aggregates-chart/{code}`, `/api/funds/asset-allocation-chart/{code}`, `/api/funds/sector-chart/{code}`, and the `/fund-details/{code}/?tab=…` HTML fragments for P/B, P/E and AUM) — no VR account involved. Every fetched number lands in an editable grid, so the tab also works fully manually. See `vr_public.py`. |
+| Your review workbook (`.xlsx`) | The **PF Review** tab fetches nothing: it's driven by one manually maintained "MF Portfolio Review" workbook per month (one row per scheme: invested value, P/B, P/E, AUM, cap split, debt & cash, sector weights), uploaded as that month's snapshot. `vr_public.py` remains as a standalone CLI for gathering those parameters from Value Research's public endpoints when preparing the workbook. |
 
 ## Features
 - **Watchlist dashboard** — sortable grid of every scheme in the active list: 1Y NAV sparkline, latest NAV, 1D/1Y/3Y/5Y returns and max drawdown, red/green coded.
@@ -47,7 +47,7 @@ Subtle motion (fade-up transitions, hover lifts) respects
 - **Holdings & overlap** — portfolio holdings, sectors and fund facts from Rupeevest's API; select multiple schemes for an **overlap matrix** (sum of min weights), a combined holdings table with common positions highlighted and unique counts, and a grouped **sector-allocation** comparison. See `holdings.py`.
 - **Category peers** — benchmark a scheme against its full AMFI category (e.g. small-cap vs every small-cap): rank & percentile per horizon, a box-plot distribution, a growth-of-₹100 chart overlaying chosen peers and an equal-weight **category-average** line, a **risk-vs-return scatter** (volatility vs 3Y CAGR with median crosshairs), a **3Y rolling-return consistency band** (the fund vs the peer 25–75% range), a sortable peer table, and one-click adding of same-category peers to the watchlist.
 - **Portfolio** — treat the watchlist as one weighted portfolio: blended growth-of-₹100, blended CAGR/volatility/max-drawdown/Sharpe, and a weekly-return correlation matrix for diversification.
-- **PF Review** — the app version of a monthly "MF Portfolio Review" spreadsheet, with its own fund list **independent of the watchlist**: add each fund once by its VR fund code (name auto-fills from Value Research; bulk-add via a fund-codes CSV or by importing the watchlist), remove funds you've exited (past snapshots keep them), enter invested ₹ values, pull the month-end parameters (P/B, P/E, AUM, large/mid/small-cap split, debt & cash, 19 sector weights) from Value Research's **public** endpoints — no VR login — and read the **investment-value-weighted** portfolio aggregates (blended P/E, cap mix, sector mix). Everything lands in an editable grid (manual entry works without VR), monthly **snapshots** persist in the browser for month-over-month comparison — weighted aggregates plus a scheme-by-scheme breakdown, and a **compare between dates** view that sets any two saved months against each other per scheme (Δ value / Δ weight charts, any single parameter side by side) — (and ride along with the encrypted cross-device sync, below), and one click downloads the review as an Excel workbook with live `SUMPRODUCT` formulas — the same layout as the manual sheet. Existing manual workbooks can be **uploaded and imported as past-month snapshots**, so history that predates the app joins the comparison. See `pf_review.py` / `vr_public.py`.
+- **PF Review** — the app version of a monthly "MF Portfolio Review" spreadsheet, fully **workbook-driven** (nothing is fetched): maintain one Excel workbook per month (one row per scheme: invested ₹ value, P/B, P/E, AUM, large/mid/small-cap split, debt & cash, 19 sector weights) and **upload it as that month's snapshot**. Each saved month renders in full — every scheme with all its parameters, the **investment-value-weighted** ◆ PORTFOLIO row (blended P/E, cap mix, sector mix), cap-mix and sector charts — and can be re-downloaded as an Excel workbook with live `SUMPRODUCT` formulas, same layout as the manual sheet. Saved months compare against each other: weighted aggregates, a **scheme-by-scheme** table + chart for any column (value, weight, P/B, P/E, sectors…), a **compare between dates** view that sets any two months against each other per scheme (Δ value / Δ weight charts, any single parameter side by side), and month-over-month trend charts. Snapshots persist in the browser (and ride along with the encrypted cross-device sync, below). See `pf_review.py`.
 - **Watchlists** — multiple named lists, persisted in the **browser** (localStorage) so they survive cloud restarts and stay per-visitor; `~/.afp_nav_explorer/watchlists.json` is the desktop fallback / migration source.
 
 ## Run
@@ -70,22 +70,13 @@ stored in each visitor's browser via localStorage (the ephemeral, shared server
 filesystem is auto-disabled; `AFP_BROWSER_ONLY=1` forces this on other hosts,
 `AFP_NO_BROWSER_STORE=1` disables the browser sync for headless tests).
 
-**PF Review fetch on cloud hosts:** Value Research's bot protection usually
-refuses cloud/datacenter IPs (HTTP 403), so the fetch can fail on Streamlit
-Cloud while working fine from a home connection — the tab's **Test VR access**
-button diagnoses exactly what VR returns. Workarounds: run the app locally for
-the monthly fetch (snapshots sync across via ☁️ Cloud sync), import the desktop
-fetcher's workbook as a snapshot, or set an outbound proxy with a
-residential/ISP IP under `[vr] proxy` in Streamlit secrets (see
-`.streamlit/secrets.toml.example`) — only VR traffic is routed through it.
-
 ## Project layout
 - `app.py` — Streamlit UI (themes, charts, all tabs).
 - `returns.py` — pure pandas/numpy analytics engine (returns, risk ratios, capture, drawdowns, SIP/goal, blend, correlation) — no network or UI, fully unit-testable.
 - `nav_data.py` — AMFI parsing + mfapi history fetch.
 - `holdings.py` — Rupeevest/Groww/Kuvera holdings fetch + overlap analytics.
-- `vr_public.py` — login-free Value Research fetcher for PF Review (public chart/data endpoints, keyed by fund code; optional cloudscraper). Runnable as a CLI: `python vr_public.py 16026`.
-- `vr_data.py` — legacy Value Research page parsing + the fund-search used by Auto-find. Runnable as a CLI to diagnose parsing against the live site: `python vr_data.py 16026`.
+- `vr_public.py` — standalone login-free Value Research fetcher (public chart/data endpoints, keyed by fund code; optional cloudscraper). No longer used by the app — kept as a CLI for preparing review-workbook data: `python vr_public.py 16026`.
+- `vr_data.py` — legacy Value Research page parsing (also supplies the sector-column list `pf_review.py` uses). Runnable as a CLI to diagnose parsing against the live site: `python vr_data.py 16026`.
 - `pf_review.py` — pure PF-Review engine: value-weighted parameter maths, monthly snapshot (de)serialisation and the Excel export with live formulas — no network or UI, unit-testable offline.
 - `store.py` — watchlist + PF-Review persistence (browser localStorage primary, JSON file fallback).
 - `cloud_sync.py` — optional encrypted, cross-device sync of watchlists + PF-Review data (see below).
@@ -97,7 +88,7 @@ residential/ISP IP under `[vr] proxy` in Streamlit secrets (see
 ## Cross-device sync (optional, encrypted) — watchlists + PF Review
 This repo is safe to make **public**. User data is never stored in clear
 text. When enabled, the app encrypts each user's watchlists **and PF-Review
-data** (monthly snapshots, invested values, VR fund codes) *in the
+data** (the monthly review snapshots) *in the
 browser/app* with their passphrase (Argon2id key derivation + Fernet/AES) and
 stores only the ciphertext in a **separate private** GitHub repo that acts as
 the datastore. Records saved before PF-Review sync existed (plain watchlist
