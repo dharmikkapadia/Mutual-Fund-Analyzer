@@ -153,6 +153,106 @@ def summary_history(snaps: dict) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- #
+# Cross-month scheme comparison — the data behind "compare between dates"
+# --------------------------------------------------------------------------- #
+WEIGHT_FIELD = "Weight %"
+TOTAL_ROW = "◆ TOTAL"
+
+
+def _row_field(r: dict, field: str, total: float):
+    """One scheme's `field` out of a snapshot row (None when absent)."""
+    if field == VALUE_COL:
+        return _num(r.get("value"))
+    if field == WEIGHT_FIELD:
+        v = _num(r.get("value"))
+        return None if v is None or total <= 0 else v / total * 100.0
+    return _num(r.get(field))
+
+
+def scheme_matrix(snaps: dict, months: list[str],
+                  field: str = VALUE_COL) -> pd.DataFrame:
+    """Scheme-level cross-month table: one row per scheme (the union over
+    `months`, matched across snapshots by VR code first, then by
+    normalised scheme name — imported workbook rows often carry no code),
+    one column per month, cells = `field` ('Value', 'Weight %' of that
+    month's total, or any parameter column). Rows are sorted by the most
+    recent value, largest first; the latest spelling of a name wins."""
+    entries: list[dict] = []
+    by_code: dict[str, dict] = {}
+    by_name: dict[str, dict] = {}
+    totals: dict[str, float] = {}
+    for mk in months:
+        rows = snapshot_rows(snaps.get(mk) or {})
+        totals[mk] = sum(_num(r.get("value")) or 0.0 for r in rows)
+        for r in rows:
+            code = r.get("code")
+            ckey = str(code) if code not in (None, "") else None
+            nkey = _norm_title(r.get("name")) or None
+            ent = ((by_code.get(ckey) if ckey else None)
+                   or (by_name.get(nkey) if nkey else None))
+            if ent is None:
+                ent = {"name": r.get("name")
+                       or (f"Fund {ckey}" if ckey else "—"), "per": {}}
+                entries.append(ent)
+            if r.get("name"):
+                ent["name"] = r["name"]
+            if ckey:
+                by_code[ckey] = ent
+            if nkey:
+                by_name[nkey] = ent
+            ent["per"][mk] = r
+
+    def _latest_value(ent: dict) -> float:
+        for mk in reversed(months):
+            r = ent["per"].get(mk)
+            v = _num(r.get("value")) if r else None
+            if v is not None:
+                return v
+        return 0.0
+
+    entries.sort(key=_latest_value, reverse=True)
+    data = []
+    for ent in entries:
+        row = []
+        for mk in months:
+            r = ent["per"].get(mk)
+            v = None if r is None else _row_field(r, field, totals[mk])
+            row.append(np.nan if v is None else float(v))
+        data.append(row)
+    return pd.DataFrame(
+        data, columns=list(months),
+        index=pd.Index([e["name"] for e in entries], name="Scheme"))
+
+
+def compare_months_frame(snaps: dict, m_old: str, m_new: str) -> pd.DataFrame:
+    """The 'compare between dates' table: one row per scheme with the
+    invested value and portfolio weight in both months and the change
+    (₹, %, percentage points), plus a TOTAL_ROW. A scheme absent from a
+    month (bought since / fully exited) shows an empty cell there but
+    counts as 0 in the deltas."""
+    val = scheme_matrix(snaps, [m_old, m_new], VALUE_COL)
+    wt = scheme_matrix(snaps, [m_old, m_new], WEIGHT_FIELD)
+    out = pd.DataFrame(index=val.index)
+    out[f"Value · {m_old}"] = val[m_old]
+    out[f"Value · {m_new}"] = val[m_new]
+    out["Δ Value"] = val[m_new].fillna(0.0) - val[m_old].fillna(0.0)
+    base = val[m_old]
+    out["Δ Value %"] = out["Δ Value"] / base.where(base > 0) * 100.0
+    out[f"Weight % · {m_old}"] = wt[m_old]
+    out[f"Weight % · {m_new}"] = wt[m_new]
+    out["Δ Weight pp"] = wt[m_new].fillna(0.0) - wt[m_old].fillna(0.0)
+    ta, tb = float(val[m_old].sum()), float(val[m_new].sum())
+    out.loc[TOTAL_ROW] = {
+        f"Value · {m_old}": ta, f"Value · {m_new}": tb,
+        "Δ Value": tb - ta,
+        "Δ Value %": (tb - ta) / ta * 100.0 if ta > 0 else np.nan,
+        f"Weight % · {m_old}": 100.0 if ta > 0 else np.nan,
+        f"Weight % · {m_new}": 100.0 if tb > 0 else np.nan,
+        "Δ Weight pp": 0.0 if ta > 0 and tb > 0 else np.nan}
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # Workbook import — a manually maintained review .xlsx becomes a snapshot
 # --------------------------------------------------------------------------- #
 def _norm_title(s) -> str:

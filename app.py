@@ -2261,6 +2261,141 @@ with tabs[9]:
                     a, b = cdf.index[0], cdf.index[1]
                     cdf.loc[f"Δ {b} vs {a}"] = cdf.loc[b] - cdf.loc[a]
                 table(cdf.reset_index(names="Month"))
+
+            # scheme-level view of the same months — the aggregates above
+            # say what the portfolio did; this shows which schemes did it
+            svals = P.scheme_matrix(pf_snaps, sorted(pick))
+            if not svals.dropna(how="all").empty:
+                st.caption("**Scheme by scheme** — invested value (₹) per "
+                           "saved month; schemes are matched across months "
+                           "by VR code, then by name.")
+                table(svals.reset_index())
+                vfig = go.Figure()
+                for vi, mk in enumerate(svals.columns):
+                    vfig.add_trace(go.Bar(
+                        y=list(svals.index)[::-1],
+                        x=svals[mk].values[::-1], name=mk,
+                        orientation="h",
+                        marker_color=SERIES[vi % len(SERIES)],
+                        hovertemplate=mk + " · %{y}: ₹%{x:,.0f}"
+                                      "<extra></extra>"))
+                vfig.update_layout(barmode="group")
+                tv(vfig, min(720, max(240, 60 + 20 * len(svals)
+                                      * len(svals.columns))),
+                   legend=True, unified=False, spikes=False)
+                chart(vfig)
+
+        # -- compare between dates: scheme-by-scheme A vs B -- #
+        section("Compare between dates")
+        st.caption("Pick two saved snapshots and compare them **scheme by "
+                   "scheme** — invested value and portfolio weight in each "
+                   "month with the change in ₹ / % / percentage points, "
+                   "plus any single parameter (P/B, P/E, cap split, "
+                   "sectors).")
+
+        def _mk_label(mk: str) -> str:
+            _ao = (pf_snaps.get(mk) or {}).get("as_on")
+            return f"{mk} · as on {_ao}" if _ao else mk
+
+        ab1, ab2, ab3 = st.columns([1.4, 1.4, 1.2],
+                                   vertical_alignment="bottom")
+        ab_new = ab1.selectbox("Newer month", months, index=0,
+                               key="pf_ab_new", format_func=_mk_label)
+        ab_opts = [m for m in months if m != ab_new]
+        ab_old = (ab2.selectbox("Older month (baseline)", ab_opts,
+                                key="pf_ab_old", format_func=_mk_label)
+                  if ab_opts else None)
+        if ab3.button("Compare between dates", type="primary",
+                      key="pf_ab_go", width="stretch",
+                      disabled=ab_old is None):
+            st.session_state.pf_ab_cmp = True
+        if ab_old is None:
+            st.info("Save a second monthly snapshot to compare two dates.")
+        elif st.session_state.get("pf_ab_cmp"):
+            sum_old = P.weighted_summary(P.review_frame(
+                P.snapshot_rows(pf_snaps[ab_old])))
+            sum_new = P.weighted_summary(P.review_frame(
+                P.snapshot_rows(pf_snaps[ab_new])))
+            hm1, hm2, hm3, hm4 = st.columns(4)
+            hm1.metric(f"Total value · {ab_new}",
+                       f"₹{sum_new['Value']:,.0f}",
+                       f"{sum_new['Value'] - sum_old['Value']:+,.0f} "
+                       f"vs {ab_old}")
+            for hmc, hlbl, hf in ((hm2, "Weighted P/E", "P/E"),
+                                  (hm3, "Weighted P/B", "P/B"),
+                                  (hm4, "Weighted AUM (cr)", "Aum in cr")):
+                hv_n, hv_o = sum_new[hf], sum_old[hf]
+                hmc.metric(hlbl, "—" if pd.isna(hv_n) else f"{hv_n:,.2f}",
+                           None if pd.isna(hv_n) or pd.isna(hv_o)
+                           else f"{hv_n - hv_o:+,.2f} vs {ab_old}",
+                           delta_color="off")
+            cmp_df = P.compare_months_frame(pf_snaps, ab_old, ab_new)
+            table(cmp_df.reset_index())
+            st.caption("A blank month cell means the scheme wasn't in that "
+                       "snapshot (bought since, or fully exited) — its "
+                       "whole value counts as the change.")
+
+            cmp_body = cmp_df.drop(index=P.TOTAL_ROW, errors="ignore")
+            dvals = cmp_body["Δ Value"].astype(float)
+            dvals = dvals[dvals.abs() >= 0.005].sort_values()
+            dwts = cmp_body["Δ Weight pp"].astype(float)
+            dwts = dwts[dwts.abs() >= 0.005].sort_values()
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                st.caption(f"Δ Value by scheme, {ab_old} → {ab_new} (₹)")
+                if dvals.empty:
+                    st.caption("No scheme's value changed.")
+                else:
+                    dfig1 = go.Figure(go.Bar(
+                        x=dvals.values, y=dvals.index, orientation="h",
+                        marker_color=[UP if v > 0 else DOWN
+                                      for v in dvals.values],
+                        hovertemplate="%{y}: %{x:+,.0f}<extra></extra>"))
+                    tv(dfig1, max(200, 40 + 24 * len(dvals)),
+                       unified=False, spikes=False)
+                    dfig1.add_vline(x=0, line_color=GRID)
+                    chart(dfig1)
+            with cc2:
+                st.caption("Δ Weight by scheme (percentage points)")
+                if dwts.empty:
+                    st.caption("No scheme's weight changed.")
+                else:
+                    dfig2 = go.Figure(go.Bar(
+                        x=dwts.values, y=dwts.index, orientation="h",
+                        marker_color=[UP if v > 0 else DOWN
+                                      for v in dwts.values],
+                        hovertemplate="%{y}: %{x:+.2f} pp"
+                                      "<extra></extra>"))
+                    tv(dfig2, max(200, 40 + 24 * len(dwts)),
+                       unified=False, spikes=False)
+                    dfig2.update_xaxes(ticksuffix=" pp")
+                    dfig2.add_vline(x=0, line_color=GRID)
+                    chart(dfig2)
+
+            pfield = st.selectbox(
+                "Compare a single parameter per scheme",
+                [P.WEIGHT_FIELD, P.VALUE_COL, *P.PARAM_COLS],
+                key="pf_ab_field")
+            pmat = P.scheme_matrix(pf_snaps, [ab_old, ab_new],
+                                   pfield).dropna(how="all")
+            if pmat.empty:
+                st.caption("Neither month has data for that parameter.")
+            else:
+                pcfig = go.Figure()
+                for mk, pcol in ((ab_old, MUTED), (ab_new, ACCENT)):
+                    pcfig.add_trace(go.Bar(
+                        y=list(pmat.index)[::-1],
+                        x=pmat[mk].values[::-1], name=mk,
+                        orientation="h", marker_color=pcol,
+                        hovertemplate=mk + " · %{y}: %{x:,.2f}"
+                                      "<extra></extra>"))
+                pcfig.update_layout(barmode="group")
+                tv(pcfig, max(240, 60 + 36 * len(pmat)), legend=True,
+                   unified=False, spikes=False)
+                chart(pcfig)
+                st.caption(f"{pfield} per scheme — grey is {ab_old}, "
+                           f"blue is {ab_new}.")
+
         hist = P.summary_history(pf_snaps)
         if len(hist) >= 2:
             section("Trends across months")
